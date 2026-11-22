@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{layout :: head('Backtest')}"></head>
+<body class="bg-light">
+<div th:replace="~{layout :: nav}"></div>
+<main class="container pb-5">
+    <div th:replace="~{layout :: flash}"></div>
+
+    <div class="alert alert-warning" role="alert">
+        <strong>This evaluates synthetic history, not real-world accuracy.</strong>
+        Twelve monthly checkpoints in 2025 are replayed from generated sample data; each forecast uses only data dated on or before its checkpoint.
+    </div>
+
+    <div class="card shadow-sm mb-4"><div class="card-body">
+        <h2 class="h5 card-title">Calibration</h2>
+        <p class="small text-muted mb-3">Predicted shortfall probability is the forecast's chance (0–100%) of a negative balance within 30 days. Observed rate is the share of checkpoints where cash collected in the next 30 days minus recurring bills due in that window was below zero.</p>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Bucket</th><th class="text-end">Checkpoints</th><th class="text-end">Mean predicted shortfall probability</th><th class="text-end">Observed shortfall rate</th></tr></thead>
+                <tbody>
+                <tr th:each="b : ${buckets}">
+                    <td th:text="${b.label()}"></td>
+                    <td class="text-end" th:text="${b.checkpoints()}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(b.meanPredictedPercent(), 1, 1) + '%'}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(b.observedShortfallPercent(), 1, 1) + '%'}"></td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>
+
+    <div class="card shadow-sm"><div class="card-body">
+        <h2 class="h5 card-title">Checkpoints</h2>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Month</th><th class="text-end">Predicted shortfall probability</th><th>Actual shortfall</th></tr></thead>
+                <tbody>
+                <tr th:each="c : ${checkpoints}">
+                    <td th:text="${c.month()}"></td>
+                    <td class="text-end" th:text="${#numbers.formatDecimal(c.predictedShortfallPercent(), 1, 1) + '%'}"></td>
+                    <td th:text="${c.actualShortfall() ? 'Yes' : 'No'}"></td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>
+</main>
+<th:block th:replace="~{layout :: scripts}"></th:block>
+</body>
+</html>

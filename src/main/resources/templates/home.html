@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{layout :: head('Home')}"></head>
+<body class="bg-light">
+<div th:replace="~{layout :: nav}"></div>
+<main class="container pb-5">
+    <div th:replace="~{layout :: flash}"></div>
+
+    <!-- Demo actions: POST forms so a plain link cannot change data -->
+    <div class="d-flex flex-wrap gap-2 justify-content-end mb-3" aria-label="Demo actions">
+        <form method="post" th:action="@{/demo/bad-day}" class="m-0">
+            <button type="submit" class="btn btn-sm btn-outline-danger">Load bad-day demo</button>
+        </form>
+        <form method="post" th:action="@{/demo/reset}" class="m-0">
+            <button type="submit" class="btn btn-sm btn-outline-secondary">Reset demo</button>
+        </form>
+    </div>
+
+    <!-- Plain-language risk banner for the next big bill -->
+    <div class="alert alert-warning d-flex justify-content-between align-items-center flex-wrap gap-2" role="alert"
+         th:if="${riskBannerVisible}">
+        <span th:text="${riskBannerMessage}"></span>
+        <a class="btn btn-sm btn-dark" href="#rescue-plan">See Rescue Plan</a>
+    </div>
+
+    <!-- KPI cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <div class="text-muted small">Expected Monthly Fees</div>
+                <div class="fs-4 fw-semibold" th:text="${@inr.format(summary.expectedMonthlyFees())}">₹0.00</div>
+            </div></div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <div class="text-muted small">Collected This Month</div>
+                <div class="fs-4 fw-semibold text-success" th:text="${@inr.format(summary.collectedThisMonth())}">₹0.00</div>
+            </div></div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <div class="text-muted small">Pending / Overdue Dues</div>
+                <div class="fs-4 fw-semibold">
+                    <span th:text="${@inr.format(summary.pendingDues())}">₹0.00</span>
+                </div>
+                <div class="small text-danger">Overdue: <span th:text="${@inr.format(summary.overdueDues())}">₹0.00</span></div>
+            </div></div>
+        </div>
+        <div class="col-6 col-lg-3">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <div class="text-muted small">Upcoming Bills Total</div>
+                <div class="fs-4 fw-semibold" th:text="${@inr.format(summary.upcomingBillsTotal())}">₹0.00</div>
+            </div></div>
+        </div>
+    </div>
+
+    <!-- Who owes me: urgency bar, chase alerts, reminders -->
+    <div class="card shadow-sm mb-4"><div class="card-body">
+        <h2 class="h5 card-title">Who owes me</h2>
+
+        <div class="row g-2 mb-3 text-center" aria-label="Overdue dues by urgency">
+            <div class="col-4" th:each="b : ${urgencyBuckets}">
+                <div class="rounded p-2 h-100"
+                     th:classappend="${b.label() == '31+ days' ? 'bg-danger text-white' : (b.label() == '8–30 days' ? 'bg-warning text-dark' : 'bg-info-subtle')}">
+                    <div class="small fw-semibold" th:text="${b.label()}">1–7 days</div>
+                    <div class="fs-5 fw-semibold" th:text="${@inr.format(b.amount())}">₹0.00</div>
+                    <div class="small" th:text="${b.count() + (b.count() == 1 ? ' invoice' : ' invoices')}">0 invoices</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-3" th:if="${!#lists.isEmpty(chaseSuggestions)}">
+            <h3 class="h6">Chase next</h3>
+            <div class="alert alert-warning py-2 mb-2" role="alert" th:each="c : ${chaseSuggestions}" th:text="${c.message()}">
+                Chase student today
+            </div>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+                <thead><tr><th>Student</th><th>Batch</th><th>Due</th><th class="text-end">Days late</th><th class="text-end">Balance</th><th></th></tr></thead>
+                <tbody>
+                <tr th:each="r, st : ${reminderRows}">
+                    <td th:text="${r.studentName()}"></td>
+                    <td th:text="${r.billingMonth()}"></td>
+                    <td th:text="${#temporals.format(r.dueDate(), 'dd MMM yyyy')}"></td>
+                    <td class="text-end" th:text="${r.daysLate()}"></td>
+                    <td class="text-end" th:text="${@inr.format(r.balance())}"></td>
+                    <td class="text-end">
+                        <button type="button" class="btn btn-sm btn-outline-primary"
+                                data-bs-toggle="modal" th:attr="data-bs-target=|#remind-${st.index}|">Remind</button>
+
+                        <div class="modal fade" tabindex="-1" aria-hidden="true" th:id="|remind-${st.index}|">
+                            <div class="modal-dialog modal-lg modal-dialog-scrollable">
+                                <div class="modal-content text-start">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title" th:text="|Remind ${r.studentName()}|">Remind student</h5>
+                                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                                    </div>
+                                    <div class="modal-body">
+                                        <ul class="nav nav-tabs mb-3" role="tablist">
+                                            <li class="nav-item" role="presentation">
+                                                <button class="nav-link active" type="button" data-bs-toggle="tab" th:attr="data-bs-target=|#tone-gentle-${st.index}|">Gentle</button>
+                                            </li>
+                                            <li class="nav-item" role="presentation">
+                                                <button class="nav-link" type="button" data-bs-toggle="tab" th:attr="data-bs-target=|#tone-firm-${st.index}|">Firm</button>
+                                            </li>
+                                            <li class="nav-item" role="presentation">
+                                                <button class="nav-link" type="button" data-bs-toggle="tab" th:attr="data-bs-target=|#tone-final-${st.index}|">Final</button>
+                                            </li>
+                                        </ul>
+                                        <div class="tab-content">
+                                            <div class="tab-pane fade show active" th:id="|tone-gentle-${st.index}|">
+                                                <p class="mb-2" style="white-space: pre-wrap;" th:text="${r.gentleText()}"></p>
+                                                <a class="btn btn-success btn-sm" target="_blank" rel="noopener" th:href="${r.gentleWaUrl()}">Send on WhatsApp</a>
+                                            </div>
+                                            <div class="tab-pane fade" th:id="|tone-firm-${st.index}|">
+                                                <p class="mb-2" style="white-space: pre-wrap;" th:text="${r.firmText()}"></p>
+                                                <a class="btn btn-success btn-sm" target="_blank" rel="noopener" th:href="${r.firmWaUrl()}">Send on WhatsApp</a>
+                                            </div>
+                                            <div class="tab-pane fade" th:id="|tone-final-${st.index}|">
+                                                <p class="mb-2" style="white-space: pre-wrap;" th:text="${r.finalText()}"></p>
+                                                <a class="btn btn-success btn-sm" target="_blank" rel="noopener" th:href="${r.finalWaUrl()}">Send on WhatsApp</a>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(reminderRows)}"><td colspan="6" class="text-muted">No overdue invoices. Nobody owes you right now.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>
+
+
+    <div class="row g-3 mb-4">
+        <!-- Cash Co-Pilot -->
+        <div class="col-lg-7">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h5 card-title">Cash Co-Pilot</h2>
+                <div th:if="${summary.shortfallRisk()}" class="alert alert-danger">
+                    Cash shortfall risk: short by <strong th:text="${@inr.format(summary.shortfallAmount())}">₹0.00</strong>
+                </div>
+                <div th:unless="${summary.shortfallRisk()}" class="alert alert-success">
+                    Upcoming bills are covered by expected collections.
+                </div>
+                <table class="table table-sm mb-3">
+                    <tbody>
+                    <tr><td>Expected monthly fees</td><td class="text-end" th:text="${@inr.format(summary.expectedMonthlyFees())}"></td></tr>
+                    <tr><td>Collected this month</td><td class="text-end" th:text="${@inr.format(summary.collectedThisMonth())}"></td></tr>
+                    <tr><td>Expected coverage (collected + pending)</td><td class="text-end" th:text="${@inr.format(summary.expectedCoverage())}"></td></tr>
+                    <tr><td>Upcoming bills total</td><td class="text-end" th:text="${@inr.format(summary.upcomingBillsTotal())}"></td></tr>
+                    </tbody>
+                </table>
+                <h3 class="h6">Upcoming bills</h3>
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Bill</th><th class="text-end">Amount</th><th>Due</th></tr></thead>
+                    <tbody>
+                    <tr th:each="line : ${summary.bills()}">
+                        <td th:text="${line.name()}"></td>
+                        <td class="text-end" th:text="${@inr.format(line.amount())}"></td>
+                        <td th:text="${#temporals.format(line.dueDate(), 'dd MMM yyyy')}"></td>
+                    </tr>
+                    <tr th:if="${#lists.isEmpty(summary.bills())}"><td colspan="3" class="text-muted">No recurring bills yet.</td></tr>
+                    </tbody>
+                </table>
+            </div></div>
+        </div>
+
+        <!-- Late payers -->
+        <div class="col-lg-5">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h5 card-title">Late-paying students</h2>
+                <h3 class="h6 mt-3">5–10 days late</h3>
+                <ul class="list-group mb-3">
+                    <li class="list-group-item d-flex justify-content-between" th:each="ls : ${summary.late5to10()}">
+                        <span th:text="${ls.name()}"></span>
+                        <span class="badge bg-warning text-dark" th:text="${ls.reliabilityLabel()}"></span>
+                    </li>
+                    <li class="list-group-item text-muted" th:if="${#lists.isEmpty(summary.late5to10())}">None</li>
+                </ul>
+                <h3 class="h6">15+ days late</h3>
+                <ul class="list-group">
+                    <li class="list-group-item d-flex justify-content-between" th:each="ls : ${summary.late15Plus()}">
+                        <span th:text="${ls.name()}"></span>
+                        <span class="badge bg-danger" th:text="${ls.reliabilityLabel()}"></span>
+                    </li>
+                    <li class="list-group-item text-muted" th:if="${#lists.isEmpty(summary.late15Plus())}">None</li>
+                </ul>
+            </div></div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="row g-3">
+        <div class="col-lg-8">
+            <div class="card shadow-sm"><div class="card-body">
+                <h2 class="h5 card-title">Billed vs collected (last 12 months)</h2>
+                <canvas id="trendChart" height="120"></canvas>
+            </div></div>
+        </div>
+        <div class="col-lg-4">
+            <div class="card shadow-sm"><div class="card-body">
+                <h2 class="h5 card-title">Invoice status</h2>
+                <canvas id="statusChart"></canvas>
+            </div></div>
+        </div>
+    </div>
+
+    <!-- Cash forecast: 30/60/90-day range with the next big bill marked -->
+    <div class="card shadow-sm mt-4"><div class="card-body">
+        <h2 class="h5 card-title">Cash forecast</h2>
+        <ul class="nav nav-pills mb-3" role="tablist">
+            <li class="nav-item" role="presentation">
+                <button type="button" class="nav-link active" data-horizon="30">30d</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button type="button" class="nav-link" data-horizon="60">60d</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button type="button" class="nav-link" data-horizon="90">90d</button>
+            </li>
+        </ul>
+        <!-- What if: delay one student's receivables and overlay the result (estimates) -->
+        <div class="row g-2 align-items-end mb-2" aria-label="What if a student pays late">
+            <div class="col-md-5">
+                <label class="form-label small mb-1" for="whatIfStudent">What if... student</label>
+                <select class="form-select form-select-sm" id="whatIfStudent">
+                    <option value="">Choose a student</option>
+                    <option th:each="s : ${whatIfStudents}" th:value="${s.id}" th:text="${s.name}">Student</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label small mb-1" for="whatIfDays">Paid late by (days)</label>
+                <input type="number" class="form-control form-control-sm" id="whatIfDays" value="15" min="0">
+            </div>
+            <div class="col-md-5 d-flex gap-2">
+                <button type="button" class="btn btn-sm btn-primary" id="whatIfApply">Apply</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="whatIfReset">Reset</button>
+            </div>
+        </div>
+        <div class="small mb-3" id="whatIfSummary"></div>
+        <canvas id="forecastChart" height="120"></canvas>
+    </div></div>
+
+    <!-- Rescue plan (target of the banner's "See Rescue Plan" link); all figures are estimates -->
+    <div class="card shadow-sm mt-4" id="rescue-plan"><div class="card-body">
+        <h2 class="h5 card-title">Rescue Plan</h2>
+        <div th:if="${rescuePlan.healthy()}" class="alert alert-success mb-0" th:text="${rescuePlan.healthyMessage()}">Cash flow looks healthy.</div>
+        <div th:unless="${rescuePlan.healthy()}">
+            <p class="small mb-3">
+                Shortfall risk now: <strong th:text="|${#numbers.formatDecimal(rescuePlan.baselineShortfallPercent(), 1, 1)}%|">0.0%</strong>
+                &middot; Final risk after selected actions: <strong th:text="|${#numbers.formatDecimal(rescuePlan.finalShortfallPercent(), 1, 1)}%|">0.0%</strong>
+            </p>
+            <div class="alert alert-info small py-2" th:if="${!#strings.isEmpty(rescuePlan.notice())}" th:text="${rescuePlan.notice()}"></div>
+            <p class="text-muted small" th:if="${#lists.isEmpty(rescuePlan.cards())}">No rescue actions are available.</p>
+            <div class="row g-3">
+                <div class="col-md-6 col-xl-4" th:each="a, st : ${rescuePlan.cards()}">
+                    <div class="border rounded p-3 h-100">
+                        <div class="form-check mb-2">
+                            <input class="form-check-input preview-toggle" type="checkbox"
+                                   th:id="|preview-${st.index}|" th:attr="data-index=${st.index}">
+                            <label class="form-check-label fw-semibold" th:for="|preview-${st.index}|" th:text="${a.title()}">Action</label>
+                        </div>
+                        <div class="small">Expected cash impact: <strong th:text="${@inr.format(a.expectedCashRecovered())}">₹0.00</strong></div>
+                        <div class="small">Cost: <span th:text="${@inr.format(a.cost())}">₹0.00</span></div>
+                        <div class="small text-muted mb-2" th:text="${a.reason()}">Reason</div>
+                        <div class="small">
+                            Risk before: <span th:text="|${#numbers.formatDecimal(rescuePlan.baselineShortfallPercent(), 1, 1)}%|">0.0%</span>
+                            &middot; If this action alone: <span th:text="|${#numbers.formatDecimal(rescuePlan.riskAfterAloneByCard()[st.index], 1, 1)}%|">0.0%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="small mt-3">Tick actions to preview the 90-day balance path. Preview risk: <span id="rescuePreviewRisk" class="fw-semibold"></span></div>
+            <p class="text-muted small mt-2 mb-0">All figures are estimates. The 60% acceptance rate for discounts and the likelihood of payment are estimates, not guarantees.</p>
+        </div>
+    </div></div>
+
+    <!-- Monthly value & ROI strip; every figure is an ESTIMATE -->
+    <div class="card shadow-sm mt-4" aria-label="Monthly value and ROI estimate"><div class="card-body">
+        <h2 class="h5 card-title">Monthly Value &amp; ROI <span class="badge bg-secondary">ESTIMATE</span></h2>
+        <div class="row g-3 text-center">
+            <div class="col-6 col-lg-3">
+                <div class="text-muted small">Overdue dues this month (estimate)</div>
+                <div class="fs-5 fw-semibold" th:text="${@inr.format(roi.overdueThisMonth())}">₹0.00</div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="text-muted small">Cash recovered after reminders (estimate)</div>
+                <div class="fs-5 fw-semibold text-success" th:text="${@inr.format(roi.estimatedRecovered())}">₹0.00</div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="text-muted small">Money at risk (estimate)</div>
+                <div class="fs-5 fw-semibold text-danger" th:text="${@inr.format(roi.moneyAtRisk())}">₹0.00</div>
+            </div>
+            <div class="col-6 col-lg-3">
+                <div class="text-muted small">Value vs. price (estimate)</div>
+                <div class="fs-5 fw-semibold" th:text="|${#numbers.formatDecimal(roi.valueToPriceMultiple(), 1, 2)}× at ${@inr.format(roi.subscriptionPrice())}/mo|">0× at ₹399/mo</div>
+            </div>
+        </div>
+        <p class="text-muted small mt-3 mb-0">All figures are estimates. Recovery uses an assumed reminder recovery rate, not measured payments.</p>
+    </div></div>
+</main>
+<div th:replace="~{layout :: scripts}"></div>
+<script th:inline="javascript">
+    var trendLabels = [[${trendLabels}]];
+    var trendBilled = [[${trendBilled}]];
+    var trendCollected = [[${trendCollected}]];
+    var statusLabels = [[${statusLabels}]];
+    var statusCounts = [[${statusCounts}]];
+
+    var inrFormatter = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+
+    new Chart(document.getElementById('trendChart'), {
+        type: 'bar',
+        data: {
+            labels: trendLabels,
+            datasets: [
+                { label: 'Billed', data: trendBilled, backgroundColor: 'rgba(13,110,253,0.6)' },
+                { label: 'Collected', data: trendCollected, backgroundColor: 'rgba(25,135,84,0.6)' }
+            ]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: { beginAtZero: true, ticks: { callback: function (v) { return inrFormatter.format(v); } } }
+            }
+        }
+    });
+
+    new Chart(document.getElementById('statusChart'), {
+        type: 'doughnut',
+        data: {
+            labels: statusLabels,
+            datasets: [{ data: statusCounts }]
+        },
+        options: { responsive: true }
+    });
+
+    var forecasts = [[${forecasts}]];
+
+    // Draws the big-bill marker and the red danger zone (worst case below zero) on the forecast chart.
+    var forecastMarkersPlugin = {
+        id: 'forecastMarkers',
+        afterDatasetsDraw: function (chart) {
+            var view = chart.$forecastView;
+            if (!view) {
+                return;
+            }
+            var ctx = chart.ctx;
+            var xScale = chart.scales.x;
+            var area = chart.chartArea;
+            var n = view.p10.length;
+
+            ctx.save();
+
+            // Red danger zone: each day where the worst case is below zero.
+            ctx.fillStyle = 'rgba(220,53,69,0.25)';
+            for (var i = 0; i < n; i++) {
+                if (view.p10[i] < 0) {
+                    var left = i > 0 ? (xScale.getPixelForValue(i - 1) + xScale.getPixelForValue(i)) / 2 : area.left;
+                    var right = i < n - 1 ? (xScale.getPixelForValue(i) + xScale.getPixelForValue(i + 1)) / 2 : area.right;
+                    ctx.fillRect(left, area.top, right - left, area.bottom - area.top);
+                }
+            }
+
+            // Vertical dashed line at the big bill's due date (plus grace).
+            if (view.billIndex >= 0) {
+                var px = xScale.getPixelForValue(view.billIndex);
+                ctx.setLineDash([5, 4]);
+                ctx.strokeStyle = '#343a40';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(px, area.top);
+                ctx.lineTo(px, area.bottom);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#343a40';
+                ctx.font = '12px sans-serif';
+                ctx.fillText('Big bill', px + 4, area.top + 12);
+            }
+
+            ctx.restore();
+        }
+    };
+
+    var forecastChart = new Chart(document.getElementById('forecastChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        plugins: [forecastMarkersPlugin],
+        options: {
+            responsive: true,
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+                y: { ticks: { callback: function (v) { return inrFormatter.format(v); } } }
+            },
+            plugins: {
+                legend: { labels: { filter: function (item) { return item.datasetIndex === 2; } } },
+                tooltip: {
+                    callbacks: {
+                        label: function (ctx) { return ctx.dataset.label + ': ' + inrFormatter.format(ctx.parsed.y); }
+                    }
+                }
+            }
+        }
+    });
+
+    // Switches the forecast chart between the 30, 60 and 90 day series.
+    function showForecast(horizon) {
+        var view = forecasts[String(horizon)];
+        if (!view) {
+            return;
+        }
+        forecastChart.$forecastView = view;
+        forecastChart.data.labels = view.labels;
+        forecastChart.data.datasets = [
+            { label: 'Worst case', data: view.p10, borderWidth: 0, pointRadius: 0,
+              fill: '+1', backgroundColor: 'rgba(13,110,253,0.15)' },
+            { label: 'Best case', data: view.p90, borderWidth: 0, pointRadius: 0, fill: false },
+            { label: 'Most likely', data: view.p50, borderColor: '#0d6efd', backgroundColor: '#0d6efd',
+              borderWidth: 2, pointRadius: 0, fill: false }
+        ];
+        refreshOverlays();
+        document.querySelectorAll('[data-horizon]').forEach(function (btn) {
+            btn.classList.toggle('active', btn.getAttribute('data-horizon') === String(horizon));
+        });
+    }
+
+    document.querySelectorAll('[data-horizon]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            showForecast(btn.getAttribute('data-horizon'));
+        });
+    });
+
+    // What-if overlay (estimates) and rescue preview overlay, both drawn dashed on the forecast chart.
+    var whatIfP50 = null;
+    var whatIfP10 = null;
+    var previewP50 = null;
+    var rescuePreviews = /*[[${rescuePlan.previews()}]]*/ {};
+    var rescueBaseP50 = /*[[${rescuePlan.baselineP50()}]]*/ [];
+    var rescueCardCount = /*[[${rescuePlan.cards().size()}]]*/ 0;
+    var whatIfSummary = document.getElementById('whatIfSummary');
+
+    // Pads or trims a series to n points so it lines up with the current horizon's labels.
+    function alignTo(values, n) {
+        var out = [];
+        for (var i = 0; i < n; i++) {
+            out.push(values && i < values.length ? values[i] : null);
+        }
+        return out;
+    }
+
+    // Rebuilds the overlay datasets on top of the current horizon's base datasets.
+    function refreshOverlays() {
+        var n = forecastChart.data.labels.length;
+        var base = forecastChart.data.datasets.filter(function (d) {
+            return d.label !== 'After delay' && d.label !== 'Preview';
+        });
+        var overlays = [];
+        if (whatIfP50) {
+            overlays.push({ label: 'After delay', data: alignTo(whatIfP50, n), borderColor: '#fd7e14', backgroundColor: '#fd7e14',
+                borderWidth: 2, borderDash: [6, 4], pointRadius: 0, fill: false });
+        }
+        if (whatIfP10) {
+            overlays.push({ label: 'After delay', data: alignTo(whatIfP10, n), borderColor: 'rgba(253,126,20,0.6)', backgroundColor: 'rgba(253,126,20,0.6)',
+                borderWidth: 1, borderDash: [6, 4], pointRadius: 0, fill: false });
+        }
+        if (previewP50) {
+            overlays.push({ label: 'Preview', data: alignTo(previewP50, n), borderColor: '#6f42c1', backgroundColor: '#6f42c1',
+                borderWidth: 2, borderDash: [4, 4], pointRadius: 0, fill: false });
+        }
+        forecastChart.data.datasets = base.concat(overlays);
+        forecastChart.update();
+    }
+
+    document.getElementById('whatIfApply').addEventListener('click', function () {
+        var studentId = document.getElementById('whatIfStudent').value;
+        var days = document.getElementById('whatIfDays').value;
+        if (!studentId) {
+            whatIfSummary.textContent = 'Choose a student first.';
+            return;
+        }
+        fetch('/api/forecast/what-if?studentId=' + encodeURIComponent(studentId) + '&delayDays=' + encodeURIComponent(days))
+            .then(function (res) {
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status);
+                }
+                return res.json();
+            })
+            .then(function (w) {
+                whatIfP50 = w.after.p50;
+                whatIfP10 = w.after.p10;
+                var worstSign = w.worstCaseChange >= 0 ? '+' : '';
+                var shortSign = w.shortfallChange >= 0 ? '+' : '';
+                whatIfSummary.textContent = 'Estimate: worst-case balance changes by ' + worstSign + inrFormatter.format(w.worstCaseChange)
+                    + '; shortfall probability changes by ' + shortSign + Number(w.shortfallChange).toFixed(1) + ' percentage points.';
+                refreshOverlays();
+            })
+            .catch(function () {
+                whatIfSummary.textContent = 'Could not run the what-if simulation.';
+            });
+    });
+
+    document.getElementById('whatIfReset').addEventListener('click', function () {
+        whatIfP50 = null;
+        whatIfP10 = null;
+        document.getElementById('whatIfStudent').value = '';
+        document.getElementById('whatIfDays').value = '15';
+        whatIfSummary.textContent = '';
+        refreshOverlays();
+    });
+
+    // Preview toggles: the checked actions form a bitmask; the matching precomputed preview is drawn.
+    if (rescueCardCount > 0) {
+        document.querySelectorAll('.preview-toggle').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                var mask = 0;
+                document.querySelectorAll('.preview-toggle').forEach(function (other) {
+                    if (other.checked) {
+                        mask += 1 << parseInt(other.getAttribute('data-index'), 10);
+                    }
+                });
+                var preview = mask > 0 ? rescuePreviews[String(mask)] : null;
+                previewP50 = preview ? preview.p50 : null;
+                document.getElementById('rescuePreviewRisk').textContent =
+                    preview ? Number(preview.shortfallPercent).toFixed(1) + '%' : '';
+                refreshOverlays();
+            });
+        });
+    }
+
+    showForecast(30);
+</script>
+</body>
+</html>

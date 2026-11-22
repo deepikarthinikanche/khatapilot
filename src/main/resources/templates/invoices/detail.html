@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{layout :: head('Invoice #' + ${invoice.id})}"></head>
+<body class="bg-light">
+<div th:replace="~{layout :: nav}"></div>
+<main class="container pb-5">
+    <div th:replace="~{layout :: flash}"></div>
+    <a class="btn btn-link px-0 mb-2" th:href="@{/invoices}">&larr; All invoices</a>
+
+    <div class="card shadow-sm mb-4" th:with="st=${effectiveStatus.name()}"><div class="card-body">
+        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+            <h1 class="h4 mb-0">Invoice #<span th:text="${invoice.id}">1</span> — <span th:text="${invoice.student.name}">Student</span></h1>
+            <span th:class="${'badge fs-6 ' + (st == 'DRAFT' ? 'bg-secondary' : (st == 'SENT' ? 'bg-info text-dark' : (st == 'PARTLY_PAID' ? 'bg-warning text-dark' : (st == 'PAID' ? 'bg-success' : 'bg-danger'))))}"
+                  th:text="${st}">SENT</span>
+        </div>
+        <dl class="row mb-4">
+            <dt class="col-sm-3">Billing month</dt><dd class="col-sm-9" th:text="${invoice.billingMonth}">2025-01</dd>
+            <dt class="col-sm-3">Issue date</dt><dd class="col-sm-9" th:text="${#temporals.format(invoice.issueDate, 'dd MMM yyyy')}">01 Jan 2025</dd>
+            <dt class="col-sm-3">Due date</dt><dd class="col-sm-9" th:text="${#temporals.format(invoice.dueDate, 'dd MMM yyyy')}">01 Jan 2025</dd>
+            <dt class="col-sm-3">Amount</dt><dd class="col-sm-9" th:text="${@inr.format(invoice.amount)}">₹0.00</dd>
+            <dt class="col-sm-3">Paid</dt><dd class="col-sm-9" th:text="${@inr.format(invoice.amountPaid())}">₹0.00</dd>
+            <dt class="col-sm-3">Balance</dt><dd class="col-sm-9 fw-semibold" th:text="${@inr.format(invoice.balance())}">₹0.00</dd>
+        </dl>
+
+        <form th:if="${invoice.status.name() == 'DRAFT'}" method="post"
+              th:action="@{/invoices/{id}/send(id=${invoice.id})}">
+            <button type="submit" class="btn btn-primary">Mark as sent</button>
+        </form>
+
+        <button type="button" class="btn btn-outline-secondary js-copy-reminder"
+                th:if="${st == 'SENT' or st == 'PARTLY_PAID' or st == 'OVERDUE'}"
+                th:data-student="${invoice.student.name}"
+                th:data-month="${invoice.billingMonth}"
+                th:data-balance="${@inr.format(invoice.balance())}"
+                th:data-due="${#temporals.format(invoice.dueDate, 'dd MMM yyyy')}">Copy Reminder</button>
+    </div></div>
+
+    <!-- Payment form: partial and full payments share this form -->
+    <div class="card shadow-sm mb-4" th:if="${invoice.balance().signum() > 0 and invoice.status.name() != 'DRAFT'}"><div class="card-body">
+        <h2 class="h5 card-title">Record payment</h2>
+        <form method="post" th:action="@{/invoices/{id}/payments(id=${invoice.id})}" class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label" for="payAmount">Amount (₹)</label>
+                <input type="number" class="form-control" id="payAmount" name="amount" min="0.01" step="0.01"
+                       th:max="${invoice.balance().toPlainString()}"
+                       th:value="${invoice.balance().toPlainString()}" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="paymentDate">Payment date</label>
+                <input type="date" class="form-control" id="paymentDate" name="paymentDate" th:value="${today}" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="paymentMethod">Method</label>
+                <select class="form-select" id="paymentMethod" name="paymentMethod" required>
+                    <option th:each="m : ${paymentMethods}" th:value="${m.name()}" th:text="${m.name()}">UPI</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <button type="submit" class="btn btn-success w-100">Record payment</button>
+            </div>
+        </form>
+    </div></div>
+
+    <!-- Payment history -->
+    <div class="card shadow-sm"><div class="card-body">
+        <h2 class="h5 card-title">Payment history</h2>
+        <table class="table mb-0">
+            <thead><tr><th>Date</th><th class="text-end">Amount</th><th>Method</th></tr></thead>
+            <tbody>
+            <tr th:each="p : ${payments}">
+                <td th:text="${#temporals.format(p.paymentDate, 'dd MMM yyyy')}">01 Jan 2025</td>
+                <td class="text-end" th:text="${@inr.format(p.amount)}">₹0.00</td>
+                <td th:text="${p.paymentMethod}">UPI</td>
+            </tr>
+            <tr th:if="${#lists.isEmpty(payments)}"><td colspan="3" class="text-muted">No payments recorded yet.</td></tr>
+            </tbody>
+        </table>
+    </div></div>
+</main>
+<div th:replace="~{layout :: scripts}"></div>
+<script>
+(function () {
+    function buildMessage(d) {
+        return 'Hi ' + d.student + ', this is a gentle reminder that ' + d.balance +
+            ' is pending towards tuition fees for ' + d.month + '. Kindly pay by ' + d.due +
+            ' via UPI or bank transfer. Thank you!';
+    }
+
+    function fallbackCopy(text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).then(function () {
+                return true;
+            }, function () {
+                return fallbackCopy(text);
+            });
+        }
+        return Promise.resolve(fallbackCopy(text));
+    }
+
+    document.addEventListener('click', function (event) {
+        var btn = event.target.closest('.js-copy-reminder');
+        if (!btn) return;
+        event.preventDefault();
+        if (!btn.dataset.label) btn.dataset.label = btn.textContent.trim();
+        copyText(buildMessage(btn.dataset)).then(function (ok) {
+            if (!ok) return;
+            btn.textContent = 'Copied!';
+            setTimeout(function () {
+                btn.textContent = btn.dataset.label;
+            }, 2000);
+        });
+    });
+})();
+</script>
+</body>
+</html>

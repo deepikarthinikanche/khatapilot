@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{layout :: head('Students')}"></head>
+<body class="bg-light">
+<div th:replace="~{layout :: nav}"></div>
+<main class="container pb-5">
+    <div th:replace="~{layout :: flash}"></div>
+
+    <div class="card shadow-sm mb-4"><div class="card-body">
+        <h1 class="h4 card-title">Students</h1>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                <tr><th>Name</th><th class="text-end">Monthly fee</th><th>Notes</th><th>Reliability</th></tr>
+                </thead>
+                <tbody>
+                <tr th:each="row : ${students}">
+                    <td th:text="${row.student().name}">Student</td>
+                    <td class="text-end" th:text="${@inr.format(row.student().monthlyFee)}">₹0.00</td>
+                    <td th:text="${row.student().notes}">Notes</td>
+                    <td><span class="badge" th:classappend="${row.reliabilityCss()}" th:text="${row.reliabilityLabel()}">On Time</span></td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(students)}"><td colspan="4" class="text-muted">No students yet.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>
+
+    <div class="card shadow-sm"><div class="card-body">
+        <h2 class="h5 card-title">Add student</h2>
+        <form method="post" th:action="@{/students}" class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label" for="name">Name</label>
+                <input type="text" class="form-control" id="name" name="name" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="monthlyFee">Monthly fee (₹)</label>
+                <input type="number" class="form-control" id="monthlyFee" name="monthlyFee" min="0.01" step="0.01" required>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="notes">Notes</label>
+                <input type="text" class="form-control" id="notes" name="notes">
+            </div>
+            <div class="col-md-2">
+                <button type="submit" class="btn btn-primary w-100">Add</button>
+            </div>
+        </form>
+    </div></div>
+</main>
+<div th:replace="~{layout :: scripts}"></div>
+</body>
+</html>

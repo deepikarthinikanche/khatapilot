@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head th:replace="~{layout :: head('Invoices')}"></head>
+<body class="bg-light">
+<div th:replace="~{layout :: nav}"></div>
+<main class="container pb-5">
+    <div th:replace="~{layout :: flash}"></div>
+
+    <!-- Filters -->
+    <div class="card shadow-sm mb-4"><div class="card-body">
+        <form method="get" th:action="@{/invoices}" class="row g-2 align-items-end">
+            <div class="col-md-4">
+                <label class="form-label" for="filterStatus">Status</label>
+                <select class="form-select" id="filterStatus" name="status">
+                    <option value="">All statuses</option>
+                    <option th:each="s : ${statuses}" th:value="${s.name()}" th:text="${s.name()}"
+                            th:selected="${s.name() == filterStatus}">DRAFT</option>
+                </select>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label" for="filterMonth">Billing month</label>
+                <input type="month" class="form-control" id="filterMonth" name="billingMonth" th:value="${filterMonth}">
+            </div>
+            <div class="col-md-4">
+                <button type="submit" class="btn btn-primary">Filter</button>
+                <a class="btn btn-outline-secondary" th:href="@{/invoices}">Clear</a>
+            </div>
+        </form>
+    </div></div>
+
+    <!-- Create invoice + Generate monthly invoices (side by side) -->
+    <div class="row g-3 mb-4">
+        <!-- Create invoice -->
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h5 card-title">Create invoice</h2>
+                <form method="post" th:action="@{/invoices}" class="row g-2">
+                    <div class="col-12">
+                        <label class="form-label" for="studentId">Student</label>
+                        <select class="form-select" id="studentId" name="studentId" required>
+                            <option value="" disabled selected>Choose a student</option>
+                            <option th:each="s : ${students}" th:value="${s.id}" th:text="${s.name}">Student</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="amount">Amount (₹)</label>
+                        <input type="number" class="form-control" id="amount" name="amount" min="0" step="0.01" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="billingMonth">Billing month</label>
+                        <input type="month" class="form-control" id="billingMonth" name="billingMonth" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="issueDate">Issue date</label>
+                        <input type="date" class="form-control" id="issueDate" name="issueDate" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="dueDate">Due date</label>
+                        <input type="date" class="form-control" id="dueDate" name="dueDate" required>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary">Create invoice</button>
+                    </div>
+                </form>
+            </div></div>
+        </div>
+
+        <!-- Generate monthly invoices -->
+        <div class="col-md-6">
+            <div class="card shadow-sm h-100"><div class="card-body">
+                <h2 class="h5 card-title">Generate monthly invoices</h2>
+                <p class="text-muted small">Creates a DRAFT invoice at each student's monthly fee for students who do not yet have one for the month.</p>
+                <form method="post" th:action="@{/invoices/generate}" class="row g-2">
+                    <div class="col-md-4">
+                        <label class="form-label" for="genMonth">Month</label>
+                        <input type="month" class="form-control" id="genMonth" name="month" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="genIssue">Issue date</label>
+                        <input type="date" class="form-control" id="genIssue" name="issueDate" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="genDue">Due date</label>
+                        <input type="date" class="form-control" id="genDue" name="dueDate" required>
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-outline-primary">Generate</button>
+                    </div>
+                </form>
+            </div></div>
+        </div>
+    </div>
+
+    <!-- Invoice table -->
+    <div class="card shadow-sm mb-4"><div class="card-body">
+        <h2 class="h5 card-title">Invoices</h2>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                <tr>
+                    <th>#</th><th>Student</th><th>Billing month</th><th>Due date</th>
+                    <th class="text-end">Amount</th><th class="text-end">Paid</th><th class="text-end">Balance</th><th>Status</th>
+                    <th><span class="visually-hidden">Actions</span></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="inv : ${invoices}" th:with="st=${inv.effectiveStatus(today).name()}">
+                    <td th:text="${inv.id}">1</td>
+                    <td th:text="${inv.student.name}">Student</td>
+                    <td th:text="${inv.billingMonth}">2025-01</td>
+                    <td th:classappend="${st == 'OVERDUE' ? 'text-danger fw-semibold' : ''}"
+                        th:text="${#temporals.format(inv.dueDate, 'dd MMM yyyy')}">01 Jan 2025</td>
+                    <td class="text-end" th:text="${@inr.format(inv.amount)}">₹0.00</td>
+                    <td class="text-end" th:text="${@inr.format(inv.amountPaid())}">₹0.00</td>
+                    <td class="text-end" th:text="${@inr.format(inv.balance())}">₹0.00</td>
+                    <td>
+                        <span th:class="${'badge ' + (st == 'DRAFT' ? 'bg-secondary' : (st == 'SENT' ? 'bg-info text-dark' : (st == 'PARTLY_PAID' ? 'bg-warning text-dark' : (st == 'PAID' ? 'bg-success' : 'bg-danger'))))}"
+                              th:text="${st}">SENT</span>
+                    </td>
+                    <td class="text-nowrap">
+                        <a class="btn btn-sm btn-outline-primary" th:href="@{/invoices/{id}(id=${inv.id})}">View / Pay</a>
+                        <button type="button" class="btn btn-sm btn-outline-secondary js-copy-reminder"
+                                th:if="${st == 'SENT' or st == 'PARTLY_PAID' or st == 'OVERDUE'}"
+                                th:data-student="${inv.student.name}"
+                                th:data-month="${inv.billingMonth}"
+                                th:data-balance="${@inr.format(inv.balance())}"
+                                th:data-due="${#temporals.format(inv.dueDate, 'dd MMM yyyy')}">Copy Reminder</button>
+                    </td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(invoices)}">
+                    <td colspan="9" class="text-muted">No invoices match the current filter.</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div></div>
+</main>
+<div th:replace="~{layout :: scripts}"></div>
+<script>
+(function () {
+    function buildMessage(d) {
+        return 'Hi ' + d.student + ', this is a gentle reminder that ' + d.balance +
+            ' is pending towards tuition fees for ' + d.month + '. Kindly pay by ' + d.due +
+            ' via UPI or bank transfer. Thank you!';
+    }
+
+    function fallbackCopy(text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(ta);
+        return ok;
+    }
+
+    function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).then(function () {
+                return true;
+            }, function () {
+                return fallbackCopy(text);
+            });
+        }
+        return Promise.resolve(fallbackCopy(text));
+    }
+
+    document.addEventListener('click', function (event) {
+        var btn = event.target.closest('.js-copy-reminder');
+        if (!btn) return;
+        event.preventDefault();
+        if (!btn.dataset.label) btn.dataset.label = btn.textContent.trim();
+        copyText(buildMessage(btn.dataset)).then(function (ok) {
+            if (!ok) return;
+            btn.textContent = 'Copied!';
+            setTimeout(function () {
+                btn.textContent = btn.dataset.label;
+            }, 2000);
+        });
+    });
+})();
+</script>
+</body>
+</html>
