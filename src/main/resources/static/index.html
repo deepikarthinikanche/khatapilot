@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KhataPilot — cash-flow demo</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<style>
+/* ===== KhataPilot light theme (presentation only) ===== */
+body{background:#F5F5F7;font-variant-numeric:tabular-nums;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;color:#111827;-webkit-font-smoothing:antialiased;}
+table,td,th,.num{font-variant-numeric:tabular-nums;}
+
+/* Sticky white navbar, 64px: brand | pill tabs | actions */
+.kp-nav{position:sticky;top:0;z-index:1030;height:64px;padding:0;background:#fff;border-bottom:1px solid #E5E7EB;}
+.kp-nav-inner{height:100%;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;}
+.kp-brand{display:flex;align-items:center;gap:10px;justify-self:start;min-width:0;}
+.kp-logo{width:32px;height:32px;border-radius:8px;background:#1D63ED;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:1rem;flex-shrink:0;}
+.kp-brand-name{font-weight:700;font-size:1.05rem;color:#111827;letter-spacing:-.01em;white-space:nowrap;}
+.kp-tabs{--bs-nav-pills-link-active-bg:#fff;--bs-nav-pills-link-active-color:#111827;display:flex;flex-wrap:nowrap;gap:2px;padding:4px;margin:0;background:#F1F5F9;border-radius:999px;justify-self:center;max-width:100%;overflow-x:auto;scrollbar-width:none;}
+.kp-tabs::-webkit-scrollbar{display:none;}
+.kp-tabs .nav-item{flex-shrink:0;}
+.kp-tabs .nav-link{border-radius:999px;color:#4B5563;font-weight:500;font-size:.875rem;padding:.4rem .95rem;white-space:nowrap;transition:background .15s,color .15s,box-shadow .15s;}
+.kp-tabs .nav-link:hover{color:#111827;}
+.kp-tabs .nav-link.active{background:#fff;color:#111827;box-shadow:0 1px 2px rgba(0,0,0,.08),0 1px 3px rgba(0,0,0,.06);}
+.kp-nav-actions{display:flex;gap:8px;align-items:center;justify-self:end;}
+.kp-btn-demo.btn{border-radius:999px;font-weight:500;font-size:.8rem;padding:.38rem .95rem;color:#111827;background:#fff;border:1px solid #D1D5DB;white-space:nowrap;}
+.kp-btn-demo.btn:hover{background:#F9FAFB;color:#111827;border-color:#9CA3AF;}
+.kp-btn-ghost.btn{border-radius:999px;font-weight:500;font-size:.8rem;padding:.38rem .95rem;color:#6B7280;background:transparent;border:1px solid transparent;white-space:nowrap;}
+.kp-btn-ghost.btn:hover{color:#111827;background:#F3F4F6;}
+.kp-subhead{background:#fff;border-bottom:1px solid #E5E7EB;font-size:.82rem;color:#6B7280;padding:6px 0;}
+main.kp-main{padding-top:20px !important;padding-bottom:32px;}
+
+/* Cards: white, 16px radius, hairline border, two-layer soft shadow */
+.kp-card{background:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.03);padding:20px;margin:0;min-width:0;}
+.kp-card > h2.h6{font-size:.95rem;font-weight:600;color:#111827;letter-spacing:-.01em;margin-bottom:12px;}
+.kp-card-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;}
+.kp-card-head-left{display:flex;flex-wrap:wrap;align-items:center;gap:12px;}
+.kp-card-title{font-size:.95rem;font-weight:600;color:#111827;letter-spacing:-.01em;margin:0;}
+.kp-text-danger{color:#991B1B !important;}
+
+/* Dashboard row layout: 20px gaps */
+.kp-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+.kp-row{display:grid;gap:20px;margin-bottom:20px;}
+.kp-row-mid,.kp-row-bottom{grid-template-columns:1.85fr 1fr;}
+.kp-row > .kp-card{height:100%;}
+
+/* Shortfall banner */
+.kp-banner{display:flex;align-items:center;gap:12px;border-radius:12px;padding:12px 16px;margin-bottom:20px;font-size:.92rem;color:#111827;}
+.kp-banner-risk{background:#FFFBEB;border-left:4px solid #D97706;}
+.kp-banner-ok{background:#ECFDF5;border:1px solid #A7F3D0;padding:10px 16px;font-size:.85rem;color:#065F46;}
+.kp-banner-icon{display:inline-flex;align-items:center;justify-content:center;color:#B45309;flex-shrink:0;font-weight:700;}
+.kp-banner-ok .kp-banner-icon{color:#059669;}
+.kp-banner-msg{flex:1 1 auto;min-width:0;}
+.kp-btn-primary.btn{background:#1D63ED;border:1px solid #1D63ED;color:#fff;border-radius:999px;font-weight:500;font-size:.8rem;padding:.35rem .9rem;white-space:nowrap;}
+.kp-btn-primary.btn:hover{background:#1852C9;border-color:#1852C9;color:#fff;}
+.kp-banner .kp-btn-primary.btn{margin-left:auto;}
+
+/* KPI cards */
+.kp-kpi{padding:16px 20px;}
+.kp-kpi-label{font-size:.8rem;color:#6B7280;font-weight:500;}
+.kp-kpi-val{font-size:1.5rem;font-weight:700;letter-spacing:-.02em;margin-top:4px;color:#111827;font-variant-numeric:tabular-nums;}
+.kp-kpi-sub{font-size:.8rem;color:#9CA3AF;margin-top:2px;}
+
+/* Forecast card */
+.kp-forecast{display:flex;flex-direction:column;}
+.kp-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.78rem;color:#6B7280;}
+.kp-legend-item{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
+.kp-sw{display:inline-block;width:16px;height:0;border-top:2px solid #1D63ED;}
+.kp-sw-band{height:10px;width:16px;border:0;background:rgba(29,99,237,0.12);border-radius:3px;}
+.kp-sw-target{border-top:2px dashed #9CA3AF;}
+.kp-sw-line{border-top:2px solid #1D63ED;}
+.kp-chart-wrap{position:relative;height:330px;}
+.kp-note{font-size:.75rem;color:#9CA3AF;margin-top:8px;}
+.kp-sim{border-top:1px solid #F1F5F9;padding-top:12px;margin-top:12px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;}
+.kp-sim-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.kp-sim-label{font-size:.8rem;color:#6B7280;font-weight:500;margin:0 2px 0 0;}
+.kp-select.form-select{width:auto;border-radius:999px;border-color:#E5E7EB;font-size:.8rem;padding:.25rem 2rem .25rem .75rem;}
+.kp-sim-readout{font-size:.85rem;color:#374151;font-variant-numeric:tabular-nums;}
+.kp-sim-readout strong{color:#111827;}
+
+/* Segmented pill toggle */
+.kp-seg{display:inline-flex;background:#F1F5F9;border-radius:999px;padding:3px;gap:2px;}
+.kp-seg-btn{border:0;background:transparent;border-radius:999px;padding:.25rem .8rem;font-size:.78rem;font-weight:500;color:#6B7280;line-height:1.4;}
+.kp-seg-btn:hover{color:#111827;}
+.kp-seg-btn.active{background:#fff;color:#111827;box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:600;}
+
+/* Chase today */
+.kp-pill-overdue{display:inline-flex;align-items:center;padding:.25rem .75rem;border-radius:999px;background:#DC2626;color:#fff;font-size:.75rem;font-weight:600;white-space:nowrap;}
+.kp-aging{display:flex;gap:3px;height:12px;border-radius:999px;overflow:hidden;background:#F1F5F9;}
+.kp-age{display:block;height:100%;min-width:0;}
+.kp-age-1{background:#F59E0B;}
+.kp-age-2{background:#F97316;}
+.kp-age-3{background:#DC2626;}
+.kp-aging-labels{display:flex;justify-content:space-between;gap:8px;font-size:.72rem;color:#6B7280;margin:6px 0 12px;}
+.kp-chase-list{display:flex;flex-direction:column;}
+.kp-chase-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid #F1F5F9;}
+.kp-chase-item:first-child{border-top:0;}
+.kp-avatar{width:34px;height:34px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:.85rem;flex-shrink:0;}
+.kp-chase-main{flex:1 1 auto;min-width:0;}
+.kp-chase-name{font-size:.9rem;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.kp-chase-detail{font-size:.78rem;color:#6B7280;}
+.kp-chase-item .btn{padding:.25rem .75rem;font-size:.78rem;}
+
+/* Rescue Plan */
+.kp-pill-risk{display:inline-flex;align-items:center;padding:.25rem .75rem;border-radius:999px;background:#DCFCE7;color:#15803D;font-size:.75rem;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.kp-rescue-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+.kp-action{display:flex;flex-direction:column;gap:10px;border:1px solid #E5E7EB;border-radius:12px;padding:12px;margin:0;cursor:pointer;background:#fff;transition:background .15s,border-color .15s;}
+.kp-action:hover{background:#F9FAFB;}
+.kp-action-num{width:24px;height:24px;border-radius:50%;background:#EFF5FF;color:#1D63ED;display:inline-flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:700;}
+.kp-action-body{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.kp-action-title{font-size:.88rem;font-weight:600;color:#111827;line-height:1.3;}
+.kp-action-gain{font-size:.78rem;color:#15803D;font-weight:500;}
+.kp-switch{position:relative;display:inline-flex;align-self:flex-start;width:40px;height:24px;margin-top:auto;}
+.kp-switch-input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}
+.kp-switch-track{position:absolute;inset:0;border-radius:999px;background:#D1D5DB;transition:background-color .2s;pointer-events:none;}
+.kp-switch-track::before{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .2s;}
+.kp-switch-input:checked + .kp-switch-track{background:#1D63ED;}
+.kp-switch-input:checked + .kp-switch-track::before{transform:translateX(16px);}
+.kp-switch-input:focus-visible + .kp-switch-track{outline:2px solid rgba(29,99,237,.45);outline-offset:2px;}
+
+/* Value this month */
+.kp-value-body{text-align:center;padding:18px 0 8px;}
+.kp-value-fig{font-size:2.6rem;font-weight:700;color:#16A34A;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;}
+.kp-value-note{font-size:.78rem;color:#6B7280;margin-top:8px;}
+
+/* Status pills */
+.kp-tag{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.72rem;font-weight:600;white-space:nowrap;}
+.kp-tag-ok{background:#DCFCE7;color:#047857;}
+
+/* Tables */
+.table{--bs-table-bg:transparent;}
+.table thead th{background:#F8FAFC;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#64748B;border-bottom:1px solid #E5E7EB;padding:.6rem .75rem;white-space:nowrap;}
+.table td{padding:.7rem .75rem;border-color:#F1F5F9;color:#1F2937;vertical-align:middle;}
+.table tbody tr:hover td{background:#F8FAFC;}
+.table-responsive{border-radius:12px;}
+
+/* Status badges */
+.badge{border-radius:999px;padding:.35em .7em;font-weight:600;font-size:.7rem;letter-spacing:.02em;}
+.badge.text-bg-success{background-color:#DCFCE7 !important;color:#166534 !important;}
+.badge.text-bg-warning{background-color:#FEF3C7 !important;color:#92400E !important;}
+.badge.text-bg-danger{background-color:#FFE4E6 !important;color:#9F1239 !important;}
+.badge.text-bg-primary{background-color:#DBEAFE !important;color:#1E40AF !important;}
+.badge.text-bg-secondary{background-color:#F1F5F9 !important;color:#475569 !important;}
+.badge[class*="text-bg-"]::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:middle;}
+
+/* Buttons */
+.btn{border-radius:10px;font-weight:500;}
+.btn-dark{--bs-btn-bg:#1D63ED;--bs-btn-border-color:#1D63ED;--bs-btn-hover-bg:#1852C9;--bs-btn-hover-border-color:#1852C9;--bs-btn-active-bg:#1852C9;--bs-btn-active-border-color:#1852C9;--bs-btn-focus-shadow-rgb:29,99,237;--bs-btn-color:#fff;--bs-btn-hover-color:#fff;--bs-btn-active-color:#fff;}
+.btn-outline-secondary{--bs-btn-color:#374151;--bs-btn-border-color:#E5E7EB;--bs-btn-hover-color:#111827;--bs-btn-hover-bg:#F3F4F6;--bs-btn-hover-border-color:#D1D5DB;--bs-btn-active-bg:#E5E7EB;--bs-btn-active-border-color:#D1D5DB;--bs-btn-active-color:#111827;background:#fff;}
+.btn-outline-dark{--bs-btn-color:#111827;--bs-btn-border-color:#E5E7EB;--bs-btn-hover-bg:#111827;--bs-btn-hover-border-color:#111827;--bs-btn-active-bg:#111827;--bs-btn-active-border-color:#111827;background:#fff;}
+.btn-outline-danger{--bs-btn-color:#BE123C;--bs-btn-border-color:#FECDD3;--bs-btn-hover-bg:#FFF1F2;--bs-btn-hover-border-color:#FDA4AF;--bs-btn-hover-color:#9F1239;--bs-btn-active-bg:#FFE4E6;--bs-btn-active-border-color:#FDA4AF;--bs-btn-active-color:#9F1239;}
+.btn-outline-success{--bs-btn-color:#047857;--bs-btn-border-color:#A7F3D0;--bs-btn-hover-bg:#ECFDF5;--bs-btn-hover-border-color:#6EE7B7;--bs-btn-hover-color:#065F46;--bs-btn-active-bg:#D1FAE5;--bs-btn-active-border-color:#6EE7B7;--bs-btn-active-color:#065F46;}
+.btn-success{--bs-btn-bg:#10B981;--bs-btn-border-color:#10B981;--bs-btn-hover-bg:#059669;--bs-btn-hover-border-color:#059669;--bs-btn-active-bg:#059669;--bs-btn-active-border-color:#059669;}
+
+/* Form controls */
+.form-control,.form-select{border-radius:10px;border-color:#E5E7EB;}
+.form-control:focus,.form-select:focus{border-color:#93B6F8;box-shadow:0 0 0 3px rgba(29,99,237,.12);}
+
+/* Modals */
+.modal-content{border:0;border-radius:16px;box-shadow:0 24px 48px -12px rgba(15,23,42,.25);overflow:hidden;}
+.modal-header{border-bottom:1px solid #F1F5F9;padding:18px 22px;}
+.modal-header .modal-title{font-size:1rem;font-weight:600;letter-spacing:-.01em;}
+.modal-body{padding:18px 22px;}
+.modal-footer{border-top:1px solid #F1F5F9;padding:14px 22px;}
+
+/* Responsive */
+@media (max-width: 1199.98px){
+  .kp-kpis{grid-template-columns:repeat(2,1fr);}
+  .kp-rescue-grid{grid-template-columns:repeat(2,1fr);}
+}
+@media (max-width: 991.98px){
+  .kp-nav{height:auto;}
+  .kp-nav-inner{grid-template-columns:1fr auto;padding:10px 16px;}
+  .kp-tabs{grid-column:1 / -1;justify-self:start;}
+  .kp-row-mid,.kp-row-bottom{grid-template-columns:1fr;}
+}
+@media (max-width: 767.98px){
+  .kp-nav-actions{grid-column:2;justify-self:end;}
+  .kp-brand-name{font-size:.95rem;}
+  .kp-rescue-grid{grid-template-columns:1fr;}
+  .kp-value-fig{font-size:2rem;}
+}
+</style>
+</head>
+<body>
+<nav class="navbar kp-nav">
+  <div class="kp-nav-inner px-3 px-lg-4">
+    <div class="kp-brand">
+      <span class="kp-logo" aria-hidden="true">K</span>
+      <span class="kp-brand-name">KhataPilot</span>
+    </div>
+    <ul class="nav nav-pills kp-tabs">
+      <li class="nav-item"><a class="nav-link" data-tab="dashboard" href="#/dashboard">Home</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="invoices" href="#/invoices">Invoices</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="students" href="#/students">Students</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="bills" href="#/bills">Bills</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="backtest" href="#/backtest">Backtest</a></li>
+    </ul>
+    <div class="kp-nav-actions">
+      <button id="btnBad" class="btn btn-sm kp-btn-demo">Load bad-day demo</button>
+      <button id="btnReset" class="btn btn-sm kp-btn-ghost">Reset</button>
+    </div>
+  </div>
+</nav>
+<div class="kp-subhead">
+  <div class="px-3 px-lg-4">Home tutor · <span id="subStudents">—</span> students · <span id="subMonth">—</span></div>
+</div>
+<main class="container-fluid px-3 px-lg-4 kp-main">
+
+  <!-- HOME / DASHBOARD -->
+  <section id="view-dashboard" class="view d-none">
+    <div id="riskBanner" class="kp-banner" role="status"></div>
+
+    <div class="kp-kpis">
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Expected monthly fees</div>
+        <div class="kp-kpi-val" id="kpiExpected">—</div>
+        <div class="kp-kpi-sub" id="kpiExpectedSub">—</div>
+      </div>
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Collected this month</div>
+        <div class="kp-kpi-val" id="kpiCollected">—</div>
+        <div class="kp-kpi-sub" id="kpiCollectedSub">—</div>
+      </div>
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Overdue</div>
+        <div class="kp-kpi-val kp-text-danger" id="kpiOverdue">—</div>
+        <div class="kp-kpi-sub" id="kpiOverdueSub">—</div>
+      </div>
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Next big bill</div>
+        <div class="kp-kpi-val" id="kpiNextBill">—</div>
+        <div class="kp-kpi-sub" id="kpiNextBillSub">—</div>
+      </div>
+    </div>
+
+    <div class="kp-row kp-row-mid">
+      <div class="kp-card kp-forecast">
+        <div class="kp-card-head">
+          <div class="kp-card-head-left">
+            <h2 class="kp-card-title">Cash forecast</h2>
+            <div class="kp-seg" role="group" aria-label="Forecast horizon">
+              <button type="button" class="kp-seg-btn" data-h="30">30d</button>
+              <button type="button" class="kp-seg-btn" data-h="60">60d</button>
+            </div>
+            <select id="horizon" class="d-none" aria-hidden="true" tabindex="-1">
+              <option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option>
+            </select>
+          </div>
+          <div class="kp-legend">
+            <span class="kp-legend-item"><span class="kp-sw kp-sw-band"></span>Likely range</span>
+            <span class="kp-legend-item"><span class="kp-sw kp-sw-target"></span>Target rent</span>
+            <span class="kp-legend-item"><span class="kp-sw kp-sw-line"></span>Most likely</span>
+          </div>
+        </div>
+        <div class="kp-chart-wrap"><canvas id="fcChart"></canvas></div>
+        <div class="kp-note">P10–P90 band from 1,000 seeded runs (seed 42). Dashed green line previews the toggled Rescue Plan actions.</div>
+        <div class="kp-sim">
+          <div class="kp-sim-controls">
+            <label class="kp-sim-label" for="whatStudent">What if…</label>
+            <select id="whatStudent" class="form-select form-select-sm kp-select"></select>
+            <label class="kp-sim-label" for="whatDelay">That student pays</label>
+            <select id="whatDelay" class="form-select form-select-sm kp-select">
+              <option value="7">+7 days</option><option value="14">+14 days</option><option value="30">+30 days</option><option value="none">doesn't pay</option>
+            </select>
+            <button type="button" id="btnApply" class="btn btn-sm kp-btn-primary">Apply</button>
+          </div>
+          <div class="kp-sim-readout">Chance of running short: <strong id="whatIfReadout">—</strong></div>
+        </div>
+      </div>
+
+      <div class="kp-card kp-chase">
+        <div class="kp-card-head">
+          <h2 class="kp-card-title">Chase today</h2>
+          <span class="kp-pill-overdue" id="overduePill">₹0 overdue</span>
+        </div>
+        <div class="kp-aging" id="agingBar"></div>
+        <div class="kp-aging-labels" id="agingLabels"></div>
+        <div class="kp-chase-list" id="chaseList"></div>
+      </div>
+    </div>
+
+    <div class="kp-row kp-row-bottom">
+      <div class="kp-card kp-rescue" id="rescuePlan">
+        <div class="kp-card-head">
+          <h2 class="kp-card-title">Rescue Plan</h2>
+          <span class="kp-pill-risk" id="riskBadge">Risk: —</span>
+        </div>
+        <div id="rescueList" class="kp-rescue-grid"></div>
+      </div>
+
+      <div class="kp-card kp-value">
+        <div class="kp-card-head">
+          <h2 class="kp-card-title">Value this month</h2>
+          <div class="kp-seg" role="group" aria-label="Recovery assumption">
+            <button type="button" class="kp-seg-btn" data-recovery="low">Low</button>
+            <button type="button" class="kp-seg-btn" data-recovery="medium">Medium</button>
+            <button type="button" class="kp-seg-btn" data-recovery="high">High</button>
+          </div>
+        </div>
+        <div class="kp-value-body">
+          <div class="kp-value-fig" id="valueFig">₹0</div>
+          <div class="kp-value-note" id="valueNote"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INVOICES -->
+  <section id="view-invoices" class="view d-none">
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="kp-card">
+          <h2 class="h6">New invoice</h2>
+          <form id="invForm" class="vstack gap-2">
+            <select id="invStudent" class="form-select form-select-sm" required></select>
+            <input id="invAmount" type="number" min="1" step="1" class="form-control form-control-sm" placeholder="Amount (₹)" required>
+            <input id="invDue" type="date" class="form-control form-control-sm" required>
+            <select id="invStatus" class="form-select form-select-sm"><option value="SENT">SENT</option><option value="DRAFT">DRAFT</option></select>
+            <button class="btn btn-sm btn-dark">Create invoice</button>
+          </form>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="kp-card">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h6 mb-0">Invoices</h2>
+            <select id="invFilter" class="form-select form-select-sm w-auto">
+              <option value="">All statuses</option><option>DRAFT</option><option>SENT</option><option>PARTLY_PAID</option><option>OVERDUE</option><option>PAID</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Student</th><th class="text-end">Amount</th><th class="text-end">Paid</th><th>Due</th><th>Status</th><th></th></tr></thead>
+              <tbody id="invBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STUDENTS -->
+  <section id="view-students" class="view d-none">
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="kp-card">
+          <h2 class="h6" id="stuFormTitle">Add student</h2>
+          <form id="stuForm" class="vstack gap-2">
+            <input type="hidden" id="stuId">
+            <input id="stuName" class="form-control form-control-sm" placeholder="Name" required>
+            <input id="stuPhone" class="form-control form-control-sm" placeholder="Phone (+91…)">
+            <input id="stuFee" type="number" min="1" step="1" class="form-control form-control-sm" placeholder="Monthly fee (₹)" required>
+            <select id="stuBehaviour" class="form-select form-select-sm">
+              <option value="on-time">on-time</option><option value="usually-late">usually-late</option><option value="rarely-pays">rarely-pays</option>
+            </select>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-dark">Save student</button>
+              <button type="button" id="stuCancel" class="btn btn-sm btn-outline-secondary">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="kp-card">
+          <h2 class="h6">Students</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Name</th><th>Notes / Phone</th><th class="text-end">Fee</th><th>Behaviour</th><th></th></tr></thead>
+              <tbody id="stuBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BILLS -->
+  <section id="view-bills" class="view d-none">
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="kp-card">
+          <h2 class="h6">Add recurring bill</h2>
+          <form id="billForm" class="vstack gap-2">
+            <input id="billName" class="form-control form-control-sm" placeholder="Bill name (e.g. Wi-Fi, Maid)" required>
+            <input id="billAmount" type="number" min="1" step="1" class="form-control form-control-sm" placeholder="Amount (₹)" required>
+            <input id="billDueDay" type="number" min="1" max="28" step="1" class="form-control form-control-sm" placeholder="Due day of month (1–28)" required>
+            <input id="billGrace" type="number" min="0" max="15" step="1" value="0" class="form-control form-control-sm" placeholder="Grace days (default 0)">
+            <button class="btn btn-sm btn-dark">Add bill</button>
+          </form>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="kp-card">
+          <h2 class="h6">Recurring bills</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Bill</th><th>Amount (₹)</th><th>Due day</th><th>Grace (days)</th><th></th></tr></thead>
+              <tbody id="billBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BACKTEST -->
+  <section id="view-backtest" class="view d-none">
+    <div class="alert alert-info" role="alert"><strong>Backtest uses synthetic history generated for this demo — it is not real financial data.</strong></div>
+    <div class="row g-3">
+      <div class="col-lg-7">
+        <div class="kp-card">
+          <h2 class="h6">Monthly checkpoints, January–December 2025</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Checkpoint</th><th class="text-end">Forecast shortfall probability</th><th>Bucket</th><th>Observed outcome</th></tr></thead>
+              <tbody id="btBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="kp-card">
+          <h2 class="h6">Calibration by bucket</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Bucket</th><th>Definition</th><th class="text-end">Checkpoints</th><th class="text-end">Observed shortfall rate</th></tr></thead>
+              <tbody id="calBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Payment modal -->
+<div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form id="payForm" class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Record payment</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body vstack gap-2">
+        <div class="small" id="payInfo"></div>
+        <input type="hidden" id="payId">
+        <input id="payAmount" type="number" min="1" step="1" class="form-control" placeholder="Amount (₹)" required>
+        <select id="payMethod" class="form-select"><option>UPI</option><option>Bank Transfer</option><option>Cash</option></select>
+      </div>
+      <div class="modal-footer"><button class="btn btn-dark">Save payment</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- Remind modal -->
+<div class="modal fade" id="remindModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Send a WhatsApp reminder</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body" id="remindBody"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* ===== Constants & helpers ===== */
+const KEY = 'khatapilot.v1';
+const DAY = 86400000;
+const $ = id => document.getElementById(id);
+const fmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const BUCKETS = [
+  { label: '0–10%', def: 'p < 10%', lo: 0, hi: 0.10 },
+  { label: '10–30%', def: '10% ≤ p < 30%', lo: 0.10, hi: 0.30 },
+  { label: '30–50%', def: '30% ≤ p < 50%', lo: 0.30, hi: 0.50 },
+  { label: '50–70%', def: '50% ≤ p < 70%', lo: 0.50, hi: 0.70 },
+  { label: '70–100%', def: 'p ≥ 70%', lo: 0.70, hi: 1.01 }
+];
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const pad = n => String(n).padStart(2, '0');
+const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const ymOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+function parseISO(s) { const [y, m, d] = String(s).split('-').map(Number); return new Date(y, m - 1, d); }
+function midnight(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function addDays(d, n) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
+function dayDiff(a, b) { return Math.round((midnight(b) - midnight(a)) / DAY); }
+function fmtDate(d) { return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); }
+function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+
+let state = { version: 1, openingCash: 18400, students: [], invoices: [], bills: [] };
+let lastDashboard = null;
+let backtestCache = null;
+let rescueToggles = new Set();
+let recoveryLevel = 'medium';
+
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { /* ignore */ }
+}
+
+/* ===== API client (Spring Boot backend, same origin) ===== */
+async function api(method, path, body, retries = 1) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  if (res.status === 409 && retries > 0) {
+    await new Promise(r => setTimeout(r, 250));
+    return api(method, path, body, retries - 1);
+  }
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* non-JSON body */ }
+  if (!res.ok) throw new Error((data && data.error) || ('Request failed (' + res.status + ')'));
+  return data;
+}
+function showError(err) {
+  console.error(err);
+  alert(err && err.message ? err.message : String(err));
+}
+function dashboardQuery(H, whatIf) {
+  const p = new URLSearchParams({ horizon: String(H) });
+  if (whatIf && whatIf.sid) {
+    p.set('whatIfStudentId', String(whatIf.sid));
+    p.set('whatIfDelayDays', whatIf.delay === 'none' ? '365' : String(whatIf.delay));
+  }
+  if (rescueToggles.size) p.set('activeCardIds', [...rescueToggles].join(','));
+  return '/api/dashboard?' + p.toString();
+}
+async function loadLists() {
+  const [students, invoices, bills] = await Promise.all([
+    api('GET', '/api/students'),
+    api('GET', '/api/invoices'),
+    api('GET', '/api/bills')
+  ]);
+  state.students = students || [];
+  state.invoices = invoices || [];
+  state.bills = bills || [];
+}
+async function refreshAll() {
+  try {
+    await loadLists();
+    renderAll();
+  } catch (err) {
+    showError(err);
+  }
+}
+
+/* ===== Bills helper (safe against missing or numeric-ID bills) ===== */
+function findRentBill() {
+  return state.bills.find(b => String(b.name || '').toLowerCase() === 'rent')
+    || state.bills[0]
+    || { id: 'rent', name: 'Rent', amount: 12000, dueDay: 5, grace: 0 };
+}
+function billOccurrences(bill, today, horizon) {
+  if (!bill || bill.dueDay == null) return [];
+  const out = [], y = today.getFullYear(), mo = today.getMonth();
+  for (let k = 0; k <= 3; k++) {
+    const dim = new Date(y, mo + k + 1, 0).getDate();
+    const cand = new Date(y, mo + k, Math.min(Number(bill.dueDay), dim));
+    const off = dayDiff(today, cand);
+    if (off >= 0 && off <= horizon + 10) out.push({ offset: off, date: cand });
+  }
+  return out;
+}
+
+/* ===== Chart.js (forecast) ===== */
+const khataPlugin = {
+  id: 'khataPlugin',
+  beforeDatasetsDraw(chart) {
+    const { ctx, chartArea: a, scales: { y } } = chart;
+    if (!a || y.min >= 0) return;
+    const z = y.getPixelForValue(0);
+    if (z <= a.top || z >= a.bottom) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(220,53,69,0.12)';
+    ctx.fillRect(a.left, z, a.right - a.left, a.bottom - z);
+    ctx.restore();
+  },
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    const marks = (chart.options.plugins.khataPlugin || {}).markers || [];
+    if (!a) return;
+    ctx.save();
+    ctx.strokeStyle = '#6c757d'; ctx.fillStyle = '#6c757d';
+    ctx.setLineDash([4, 4]); ctx.font = '11px sans-serif';
+    marks.forEach(m => {
+      const px = x.getPixelForValue(m.index);
+      if (px < a.left || px > a.right) return;
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+      ctx.fillText(m.label, px + 3, a.top + 12);
+    });
+    ctx.restore();
+  }
+};
+let fcChart = null;
+function drawChart(labels, res, previewP50, markers, rentAmt) {
+  const data = {
+    labels,
+    datasets: [
+      { label: 'P10', data: res.p10, borderColor: 'transparent', pointRadius: 0, fill: false },
+      { label: 'P10–P90 band', data: res.p90, borderColor: 'transparent', backgroundColor: 'rgba(29,99,237,0.12)', pointRadius: 0, fill: '-1' },
+      { label: 'Balance (P50)', data: res.p50, borderColor: '#1D63ED', borderWidth: 2, pointRadius: 0, stepped: true, fill: 'origin',
+        backgroundColor: ctx => {
+          const c = ctx.chart, a = c.chartArea;
+          if (!a) return 'rgba(29,99,237,0.10)';
+          const g = c.ctx.createLinearGradient(0, a.top, 0, a.bottom);
+          g.addColorStop(0, 'rgba(29,99,237,0.16)'); g.addColorStop(1, 'rgba(29,99,237,0)');
+          return g;
+        } },
+      { label: 'Preview (P50)', data: previewP50 || [], borderColor: '#16A34A', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, stepped: true, fill: false },
+      { label: 'Target rent', data: labels.map(() => rentAmt), borderColor: '#9CA3AF', borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, fill: false }
+    ]
+  };
+  const options = {
+    animation: false, responsive: true, maintainAspectRatio: false,
+    layout: { padding: { right: 28, top: 12 } },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      khataPlugin: { markers }
+    },
+    scales: { y: { ticks: { callback: v => fmt.format(v) } }, x: { ticks: { maxTicksLimit: 10, autoSkip: true } } }
+  };
+  if (!fcChart) {
+    fcChart = new Chart($('fcChart'), { type: 'line', data, options, plugins: [khataPlugin] });
+  } else {
+    fcChart.data = data;
+    fcChart.options.plugins.khataPlugin = { markers };
+    fcChart.update('none');
+  }
+}
+
+/* ===== Rendering: dashboard ===== */
+const RECOVERY = {
+  low:    { label: 'Conservative', rate: 0.3 },
+  medium: { label: 'Base', rate: 0.5 },
+  high:   { label: 'Optimistic', rate: 0.8 }
+};
+const AGING = [
+  { label: '1–7 days', cls: 'kp-age-1', max: 7 },
+  { label: '8–14 days', cls: 'kp-age-2', max: 14 },
+  { label: '15+ days', cls: 'kp-age-3', max: Infinity }
+];
+const AVATAR_COLORS = ['#1D63ED', '#7C3AED', '#0D9488', '#DB2777', '#D97706'];
+
+function renderChase(overdueInv, today) {
+  const aged = AGING.map(() => 0);
+  overdueInv.forEach(i => {
+    const days = Math.max(1, dayDiff(parseISO(i.dueDate), today));
+    const k = days <= 7 ? 0 : days <= 14 ? 1 : 2;
+    aged[k] += Number(i.amount) - Number(i.paid);
+  });
+  const total = aged.reduce((s, v) => s + v, 0);
+  $('overduePill').textContent = `${fmt.format(total)} overdue`;
+  $('agingBar').innerHTML = AGING.map((a, k) => aged[k] > 0
+    ? `<span class="kp-age ${a.cls}" style="flex:${aged[k]} 0 0"></span>` : '').join('');
+  $('agingLabels').innerHTML = AGING.map((a, k) =>
+    `<span>${a.label}${total > 0 ? ' · ' + fmt.format(aged[k]) : ''}</span>`).join('');
+  const rows = overdueInv.slice()
+    .sort((a, b) => (Number(b.amount) - Number(b.paid)) - (Number(a.amount) - Number(a.paid))).slice(0, 5)
+    .map((i, k) => {
+      const name = i.studentName || (state.students.find(x => String(x.id) === String(i.studentId)) || {}).name || 'Student';
+      const days = dayDiff(parseISO(i.dueDate), today);
+      return `<div class="kp-chase-item">
+        <span class="kp-avatar" style="background:${AVATAR_COLORS[k % AVATAR_COLORS.length]}">${esc(name.charAt(0).toUpperCase())}</span>
+        <div class="kp-chase-main"><div class="kp-chase-name">${esc(name)}</div>
+          <div class="kp-chase-detail">${fmt.format(Number(i.amount) - Number(i.paid))} overdue · ${days > 0 ? days + ' days late' : 'due now'}</div></div>
+        <button type="button" class="btn btn-sm kp-btn-primary" data-act="remind" data-id="${esc(i.id)}">Remind</button>
+      </div>`;
+    }).join('');
+  $('chaseList').innerHTML = rows || '<p class="small text-secondary mb-0">Nothing overdue right now.</p>';
+}
+
+async function renderDashboard() {
+  const today = new Date();
+  const H = Number($('horizon').value) || 30;
+  const sid = $('whatStudent').value;
+  const whatIf = sid ? { sid, delay: $('whatDelay').value } : null;
+  let dash;
+  try {
+    dash = await api('GET', dashboardQuery(H, whatIf));
+  } catch (err) {
+    showError(err);
+    return;
+  }
+  lastDashboard = dash;
+  const base = dash.base;
+  const preview = dash.preview || null;
+  const baseline = dash.baseline || base;
+  if (dash.openingCash != null) state.openingCash = Number(dash.openingCash);
+
+  const rent = findRentBill();
+  const rentOcc = billOccurrences(rent, today, 400)[0];
+  const rentDay = rentOcc ? rentOcc.date.getDate() : Number(rent.dueDay || 5);
+  const rentWhen = rentOcc ? (rentOcc.offset === 0 ? ' — today' : ` — in ${rentOcc.offset} day${rentOcc.offset === 1 ? '' : 's'}`) : '';
+  const activeProb = preview ? preview.shortfallProb : base.shortfallProb;
+  const pct = Math.round(activeProb * 100);
+
+  // Shortfall banner
+  const banner = $('riskBanner');
+  if (activeProb > 0.10) {
+    banner.className = 'kp-banner kp-banner-risk';
+    banner.innerHTML = `
+      <span class="kp-banner-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+      <div class="kp-banner-msg"><strong>${pct}% chance you can't cover ${esc(rent.name)} (${fmt.format(rent.amount)}) on the ${ordinal(rentDay)}${rentWhen}</strong></div>
+      <button type="button" class="btn btn-sm kp-btn-primary" data-act="rescue">See Rescue Plan</button>`;
+  } else {
+    banner.className = 'kp-banner kp-banner-ok';
+    banner.innerHTML = `<span class="kp-banner-icon" aria-hidden="true">✓</span><div class="kp-banner-msg">Healthy buffer: only a ${pct}% chance of running short before ${esc(rent.name)}.</div>`;
+  }
+
+  // KPI strip
+  const monthKey = ymOf(today);
+  const cur = state.invoices.filter(i => String(i.dueDate || '').startsWith(monthKey));
+  const kpis = dash.kpis || {};
+  const expected = kpis.expectedMonthlyFees != null ? Number(kpis.expectedMonthlyFees) : cur.reduce((s, i) => s + Number(i.amount), 0);
+  const collected = kpis.collectedThisMonth != null ? Number(kpis.collectedThisMonth) : cur.reduce((s, i) => s + Math.min(Number(i.paid), Number(i.amount)), 0);
+  const paidCount = cur.filter(i => i.status === 'PAID').length;
+  const overdueInv = state.invoices.filter(i => (i.status === 'OVERDUE' || i.status === 'PARTLY_PAID') && Number(i.amount) - Number(i.paid) > 0);
+  const overdueSum = overdueInv.reduce((s, i) => s + (Number(i.amount) - Number(i.paid)), 0);
+  const lateStudents = new Set(overdueInv.map(i => String(i.studentId))).size;
+
+  $('kpiExpected').textContent = fmt.format(expected);
+  $('kpiExpectedSub').textContent = `${state.students.length} students`;
+  $('kpiCollected').textContent = fmt.format(collected);
+  $('kpiCollectedSub').textContent = `${paidCount} of ${cur.length || state.students.length} paid`;
+  $('kpiOverdue').textContent = fmt.format(overdueSum);
+  $('kpiOverdueSub').textContent = `${lateStudents} student${lateStudents === 1 ? '' : 's'} late`;
+  $('kpiNextBill').textContent = fmt.format(rent.amount);
+  $('kpiNextBillSub').textContent = `${rent.name} due on the ${ordinal(rentDay)}`;
+
+  // Live what-if readout
+  const basePct = Math.round(baseline.shortfallProb * 100);
+  const afterWhatIfPct = Math.round((preview ? preview.shortfallProb : base.shortfallProb) * 100);
+  $('whatIfReadout').textContent = `${basePct}% → ${afterWhatIfPct}%`;
+  document.querySelectorAll('[data-h]').forEach(b => b.classList.toggle('active', Number(b.dataset.h) === H));
+
+  // Rescue Plan cards & projected risk
+  const serverCards = Array.isArray(dash.rescueCards) ? dash.rescueCards : [];
+  let projectedProb = activeProb;
+  let totalRecoveredPreview = 0;
+  serverCards.forEach(c => {
+    if (rescueToggles.has(String(c.id))) {
+      totalRecoveredPreview += Number(c.expectedCashRecovered || 0);
+      if (c.afterRisk != null) projectedProb = Math.min(projectedProb, Number(c.afterRisk));
+    }
+  });
+  const pctAfterRescue = Math.round(projectedProb * 100);
+  $('riskBadge').textContent = `Risk: ${pct}% → about ${pctAfterRescue}%`;
+
+  // Value this month
+  const level = RECOVERY[recoveryLevel];
+  $('valueFig').textContent = fmt.format(Math.round(overdueSum * level.rate));
+  $('valueNote').textContent = `${level.label} recovery: ${Math.round(level.rate * 100)}% of ${fmt.format(overdueSum)} overdue`;
+  document.querySelectorAll('[data-recovery]').forEach(b => b.classList.toggle('active', b.dataset.recovery === recoveryLevel));
+
+  renderChase(overdueInv, today);
+
+  // Chart series (use server labels/p10/p50/p90)
+  const labels = Array.isArray(base.labels) ? base.labels : [];
+  const markers = [];
+  state.bills.forEach(b => billOccurrences(b, today, H).forEach(o => {
+    if (o.offset >= 1 && o.offset < labels.length) markers.push({ index: o.offset, label: b.name });
+  }));
+  let previewLine = preview ? preview.p50 : null;
+  if (!previewLine && totalRecoveredPreview > 0 && Array.isArray(base.p50)) {
+    previewLine = base.p50.map((v, idx) => idx >= 2 ? Math.round((v + totalRecoveredPreview) * 100) / 100 : v);
+  }
+  drawChart(labels, base, previewLine, markers, Number(rent.amount));
+
+  $('rescueList').innerHTML = serverCards.map((c, idx) => {
+    const cid = String(c.id);
+    const gainText = Number(c.expectedCashRecovered || 0) > 0
+      ? `+${fmt.format(c.expectedCashRecovered)} expected${c.estimate ? ' (60% accept)' : ''}`
+      : 'Timing only · ₹0 cost';
+    return `
+    <label class="kp-action">
+      <span class="kp-action-num">${idx + 1}</span>
+      <span class="kp-action-body"><span class="kp-action-title">${esc(c.title)}</span><span class="kp-action-gain">${esc(gainText)}</span></span>
+      <span class="kp-switch"><input class="kp-switch-input" type="checkbox" role="switch" data-tid="${esc(cid)}" ${rescueToggles.has(cid) ? 'checked' : ''}><span class="kp-switch-track"></span></span>
+    </label>`;
+  }).join('') || '<p class="small text-secondary mb-0">Healthy buffer — no rescue actions needed right now.</p>';
+}
+
+function refreshStudentSelects() {
+  const opts = state.students.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+  const w = $('whatStudent'), keep = w.value;
+  w.innerHTML = '<option value="">— none —</option>' + opts;
+  w.value = keep;
+  $('invStudent').innerHTML = opts;
+}
+
+/* ===== Rendering: invoices ===== */
+const STATUS_CLS = { PAID: 'success', PARTLY_PAID: 'warning', OVERDUE: 'danger', SENT: 'primary', DRAFT: 'secondary' };
+function renderInvoices() {
+  const f = $('invFilter').value;
+  const rows = state.invoices
+    .filter(i => !f || i.status === f)
+    .sort((a, b) => String(b.dueDate).localeCompare(String(a.dueDate)))
+    .slice(0, 200)
+    .map(i => {
+      const s = state.students.find(x => String(x.id) === String(i.studentId));
+      const stuName = i.studentName || (s ? s.name : '(deleted)');
+      const unpaid = i.status !== 'PAID';
+      return `<tr>
+        <td>${esc(stuName)}</td>
+        <td class="text-end">${fmt.format(i.amount)}</td>
+        <td class="text-end">${fmt.format(i.paid)}</td>
+        <td>${esc(i.dueDate)}</td>
+        <td><span class="badge text-bg-${STATUS_CLS[i.status] || 'secondary'}">${esc(i.status)}</span></td>
+        <td class="text-nowrap">
+          ${unpaid ? `<button class="btn btn-sm btn-outline-dark" data-act="pay" data-id="${esc(i.id)}">Record payment</button>
+          <button class="btn btn-sm btn-outline-success" data-act="remind" data-id="${esc(i.id)}">Remind</button>` : ''}
+        </td></tr>`;
+    }).join('');
+  $('invBody').innerHTML = rows || '<tr><td colspan="6" class="text-secondary">No invoices.</td></tr>';
+}
+
+/* ===== Rendering: students ===== */
+function renderStudents() {
+  $('stuBody').innerHTML = state.students.map(s => `<tr>
+    <td>${esc(s.name)}</td><td>${esc(s.notes || s.phone || '—')}</td><td class="text-end">${fmt.format(s.fee)}</td>
+    <td>${esc(s.behaviour || 'tracked')}</td>
+    <td class="text-nowrap">
+      <button class="btn btn-sm btn-outline-dark" data-act="edit" data-id="${esc(s.id)}">Edit</button>
+      <button class="btn btn-sm btn-outline-danger" data-act="delete" data-id="${esc(s.id)}">Delete</button>
+    </td></tr>`).join('') || '<tr><td colspan="5" class="text-secondary">No students.</td></tr>';
+}
+
+/* ===== Rendering: bills ===== */
+function renderBills() {
+  $('billBody').innerHTML = state.bills.map(b => `<tr data-row="${esc(b.id)}">
+    <td>${esc(b.name)}</td>
+    <td><input class="form-control form-control-sm" type="number" min="0" step="1" data-f="amount" value="${b.amount}"></td>
+    <td><input class="form-control form-control-sm" type="number" min="1" max="28" step="1" data-f="dueDay" value="${b.dueDay}"></td>
+    <td><input class="form-control form-control-sm" type="number" min="0" step="1" data-f="grace" value="${b.grace}"></td>
+    <td><button class="btn btn-sm btn-dark" data-act="save-bill" data-id="${esc(b.id)}">Save</button></td>
+  </tr>`).join('');
+}
+
+/* ===== Rendering: backtest ===== */
+async function renderBacktest() {
+  if (!backtestCache) {
+    try { backtestCache = await api('GET', '/api/backtest'); } catch (err) { showError(err); return; }
+  }
+  const checkpoints = Array.isArray(backtestCache) ? backtestCache : (backtestCache.checkpoints || []);
+  const serverBuckets = Array.isArray(backtestCache.buckets) ? backtestCache.buckets : [];
+
+  $('btBody').innerHTML = checkpoints.map(r => {
+    const bi = BUCKETS.findIndex(b => r.prob >= b.lo && r.prob < b.hi);
+    const bLabel = bi >= 0 ? BUCKETS[bi].label : '0–10%';
+    return `<tr>
+      <td>${esc(r.month)}</td>
+      <td class="text-end">${Math.round(r.prob * 100)}%</td>
+      <td>${bLabel}</td>
+      <td>${r.observed ? 'Shortfall happened' : 'No shortfall'}</td></tr>`;
+  }).join('');
+
+  $('calBody').innerHTML = BUCKETS.map((b, i) => {
+    const sb = serverBuckets[i];
+    if (sb) {
+      return `<tr><td>${esc(sb.label || b.label)}</td><td>${b.def}</td><td class="text-end">${sb.checkpoints}</td>
+        <td class="text-end">${sb.checkpoints ? Math.round(sb.observedShortfallProb * 100) + '%' : '—'}</td></tr>`;
+    }
+    const rows = checkpoints.filter(r => r.prob >= b.lo && r.prob < b.hi);
+    const hits = rows.filter(r => r.observed).length;
+    return `<tr><td>${b.label}</td><td>${b.def}</td><td class="text-end">${rows.length}</td>
+      <td class="text-end">${rows.length ? Math.round(hits / rows.length * 100) + '%' : '—'}</td></tr>`;
+  }).join('');
+}
+
+/* ===== Routing ===== */
+const VIEWS = ['dashboard', 'invoices', 'students', 'bills', 'backtest'];
+function route() {
+  const m = (location.hash.match(/^#\/(\w+)/) || [])[1];
+  const name = VIEWS.includes(m) ? m : 'dashboard';
+  VIEWS.forEach(v => $('view-' + v).classList.toggle('d-none', v !== name));
+  document.querySelectorAll('[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === name));
+  if (name === 'dashboard') renderDashboard();
+  if (name === 'backtest') renderBacktest();
+}
+
+function renderHeader() {
+  const today = new Date();
+  $('subStudents').textContent = state.students.length;
+  $('subMonth').textContent = `${MONTHS_FULL[today.getMonth()]} ${today.getFullYear()}`;
+}
+
+function renderAll() {
+  refreshStudentSelects();
+  renderInvoices();
+  renderStudents();
+  renderBills();
+  renderHeader();
+  backtestCache = null;
+  route();
+}
+
+/* ===== Demo controls ===== */
+async function loadBadDay() {
+  const btn = $('btnBad');
+  btn.disabled = true;
+  try {
+    await api('POST', '/api/demo/bad-day');
+    rescueToggles = new Set();
+    await refreshAll();
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+async function resetDemo() {
+  const btn = $('btnReset');
+  btn.disabled = true;
+  try {
+    await api('POST', '/api/demo/reset');
+    rescueToggles = new Set();
+    await refreshAll();
+  } catch (err) {
+    showError(err);
+  } finally {
+    btn.disabled = false;
+  }
+}
+$('btnBad').addEventListener('click', loadBadDay);
+$('btnReset').addEventListener('click', resetDemo);
+
+/* ===== Forms & actions ===== */
+['horizon', 'whatStudent', 'whatDelay'].forEach(id => $(id).addEventListener('change', renderDashboard));
+
+$('rescueList').addEventListener('change', e => {
+  const tid = e.target.dataset.tid;
+  if (!tid) return;
+  if (e.target.checked) rescueToggles.add(tid); else rescueToggles.delete(tid);
+  renderDashboard();
+});
+
+document.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => {
+  $('horizon').value = b.dataset.h; renderDashboard();
+}));
+document.querySelectorAll('[data-recovery]').forEach(b => b.addEventListener('click', () => {
+  recoveryLevel = b.dataset.recovery; renderDashboard();
+}));
+$('btnApply').addEventListener('click', () => renderDashboard());
+$('riskBanner').addEventListener('click', e => {
+  if (e.target.closest('[data-act="rescue"]')) $('rescuePlan').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+$('chaseList').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act="remind"]');
+  if (!btn) return;
+  const inv = state.invoices.find(x => String(x.id) === String(btn.dataset.id));
+  if (inv) openRemind(inv);
+});
+
+$('invFilter').addEventListener('change', renderInvoices);
+
+$('invForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const due = $('invDue').value;
+  try {
+    await api('POST', '/api/invoices', {
+      studentId: Number($('invStudent').value),
+      amount: Number($('invAmount').value),
+      issueDate: isoDate(new Date()),
+      dueDate: due,
+      billingMonth: due.slice(0, 7)
+    });
+  } catch (err) { showError(err); return; }
+  e.target.reset();
+  await refreshAll();
+});
+
+let payingId = null;
+$('invBody').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const inv = state.invoices.find(x => String(x.id) === String(btn.dataset.id));
+  if (!inv) return;
+  if (btn.dataset.act === 'pay') {
+    payingId = inv.id;
+    const left = Number(inv.amount) - Number(inv.paid);
+    $('payInfo').textContent = `Outstanding: ${fmt.format(left)}`;
+    $('payAmount').value = left; $('payAmount').max = left;
+    bootstrap.Modal.getOrCreateInstance($('payModal')).show();
+  } else if (btn.dataset.act === 'remind') {
+    openRemind(inv);
+  }
+});
+
+$('payForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const inv = state.invoices.find(x => String(x.id) === String(payingId));
+  if (!inv) return;
+  const amt = Math.min(Number($('payAmount').value), Number(inv.amount) - Number(inv.paid));
+  if (!(amt > 0)) return;
+  try {
+    await api('POST', '/api/invoices/' + encodeURIComponent(inv.id) + '/pay', {
+      amount: amt,
+      date: isoDate(new Date()),
+      method: $('payMethod').value.toUpperCase().replace(' ', '_')
+    });
+  } catch (err) { showError(err); return; }
+  bootstrap.Modal.getOrCreateInstance($('payModal')).hide();
+  await refreshAll();
+});
+
+let remindDrafts = [];
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch (err) { /* ignore */ }
+  ta.remove();
+  return Promise.resolve();
+}
+function openRemind(inv) {
+  const s = state.students.find(x => String(x.id) === String(inv.studentId));
+  const name = inv.studentName || (s ? s.name : 'there');
+  const amt = fmt.format(Number(inv.amount) - Number(inv.paid)), due = fmtDate(parseISO(inv.dueDate));
+  remindDrafts = [
+    { label: 'Gentle', text: `Hi ${name}, hope you're doing well! A gentle reminder that the invoice of ${amt} was due on ${due}. Please let me know if it's already paid. Thank you! – Meera` },
+    { label: 'Firm', text: `Hi ${name}, the invoice of ${amt} was due on ${due} and is still pending. Please make the payment at the earliest and share the confirmation. – Meera` },
+    { label: 'Final', text: `Hi ${name}, this is a final reminder: the invoice of ${amt} was due on ${due} and remains unpaid. Please clear it within 2 days. – Meera` }
+  ];
+  $('remindBody').innerHTML = remindDrafts.map((d, i) => `
+    <div class="mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-semibold">${d.label}</span>
+        <span class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-dark" data-copy="${i}">Copy</button>
+          <a class="btn btn-sm btn-success" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(d.text)}">Open in WhatsApp</a>
+        </span>
+      </div>
+      <textarea class="form-control" rows="3" readonly>${esc(d.text)}</textarea>
+    </div>`).join('');
+  bootstrap.Modal.getOrCreateInstance($('remindModal')).show();
+}
+$('remindBody').addEventListener('click', e => {
+  const i = e.target.dataset.copy;
+  if (i !== undefined) copyText(remindDrafts[Number(i)].text).then(() => { e.target.textContent = 'Copied'; });
+});
+
+function resetStudentForm() {
+  $('stuForm').reset(); $('stuId').value = '';
+  $('stuFormTitle').textContent = 'Add student';
+}
+$('stuForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const id = $('stuId').value;
+  if (id) {
+    const s = state.students.find(x => String(x.id) === String(id));
+    if (s) {
+      s.name = $('stuName').value.trim();
+      s.notes = $('stuPhone').value.trim();
+      s.fee = Number($('stuFee').value);
+      s.behaviour = $('stuBehaviour').value;
+    }
+    resetStudentForm();
+    save(); renderAll();
+    return;
+  }
+  try {
+    await api('POST', '/api/students', {
+      name: $('stuName').value.trim(),
+      monthlyFee: Number($('stuFee').value),
+      notes: [$('stuPhone').value.trim(), $('stuBehaviour').value].filter(Boolean).join(' · ')
+    });
+  } catch (err) { showError(err); return; }
+  resetStudentForm();
+  await refreshAll();
+});
+$('stuCancel').addEventListener('click', resetStudentForm);
+$('stuBody').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  if (btn.dataset.act === 'edit') {
+    const s = state.students.find(x => String(x.id) === String(id));
+    if (!s) return;
+    $('stuId').value = s.id; $('stuName').value = s.name; $('stuPhone').value = s.notes || s.phone || '';
+    $('stuFee').value = s.fee; $('stuBehaviour').value = s.behaviour || 'on-time';
+    $('stuFormTitle').textContent = 'Edit student';
+  } else if (btn.dataset.act === 'delete') {
+    if (!confirm('Delete this student and their invoices?')) return;
+    state.students = state.students.filter(s => String(s.id) !== String(id));
+    state.invoices = state.invoices.filter(i => String(i.studentId) !== String(id));
+    save(); renderAll();
+  }
+});
+
+$('billForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  try {
+    await api('POST', '/api/bills', {
+      name: $('billName').value.trim(),
+      amount: Number($('billAmount').value),
+      dayOfMonth: Number($('billDueDay').value),
+      graceDays: Number($('billGrace').value || 0)
+    });
+  } catch (err) { showError(err); return; }
+  e.target.reset();
+  $('billGrace').value = 0;
+  await refreshAll();
+});
+
+window.addEventListener('hashchange', route);
+refreshAll();
+</script>
+</body>
+</html>

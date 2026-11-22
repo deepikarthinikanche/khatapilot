@@ -5,6 +5,7 @@ import com.khatapilot.forecast.CashForecastService;
 import com.khatapilot.forecast.DailyForecast;
 import com.khatapilot.forecast.RescuePlanService;
 import com.khatapilot.forecast.RiskBanner;
+import com.khatapilot.config.DemoLock;
 import com.khatapilot.config.SampleDataLoader;
 import com.khatapilot.model.RecurringBill;
 import com.khatapilot.repository.RecurringBillRepository;
@@ -16,6 +17,7 @@ import com.khatapilot.service.ValueRoiService;
 import com.khatapilot.service.ValueRoiService.RoiStrip;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -35,6 +37,7 @@ import java.util.Map;
 @Controller
 public class HomeController {
 
+    private static final String DEMO_BUSY_MESSAGE = "Demo is busy, try again";
     private static final long FORECAST_SEED = 42L;
     private static final int[] FORECAST_HORIZONS = {30, 60, 90};
     private static final DateTimeFormatter LABEL_FORMAT = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH);
@@ -45,32 +48,39 @@ public class HomeController {
     private final RescuePlanService rescuePlanService;
     private final ValueRoiService valueRoiService;
     private final SampleDataLoader sampleDataLoader;
+    private final DemoLock demoLock;
 
     public HomeController(DashboardService dashboardService,
                           CashForecastService cashForecastService,
                           RecurringBillRepository recurringBillRepository,
                           RescuePlanService rescuePlanService,
                           ValueRoiService valueRoiService,
-                          SampleDataLoader sampleDataLoader) {
+                          SampleDataLoader sampleDataLoader,
+                          DemoLock demoLock) {
         this.dashboardService = dashboardService;
         this.cashForecastService = cashForecastService;
         this.recurringBillRepository = recurringBillRepository;
         this.rescuePlanService = rescuePlanService;
         this.valueRoiService = valueRoiService;
         this.sampleDataLoader = sampleDataLoader;
+        this.demoLock = demoLock;
     }
 
     /** Demo: replaces data with the deterministic bad-day crisis (opening cash 9200, Rent 12000 in 4 days). */
     @PostMapping("/demo/bad-day")
-    public String loadBadDayDemo() {
-        sampleDataLoader.loadBadDayDemo();
+    public String loadBadDayDemo(RedirectAttributes redirectAttributes) {
+        if (!demoLock.tryRun(sampleDataLoader::loadBadDayDemo)) {
+            redirectAttributes.addFlashAttribute("demoMessage", DEMO_BUSY_MESSAGE);
+        }
         return "redirect:/";
     }
 
     /** Demo: restores the normal sample data and the default opening cash. */
     @PostMapping("/demo/reset")
-    public String resetDemo() {
-        sampleDataLoader.resetToSampleData();
+    public String resetDemo(RedirectAttributes redirectAttributes) {
+        if (!demoLock.tryRun(sampleDataLoader::resetToSampleData)) {
+            redirectAttributes.addFlashAttribute("demoMessage", DEMO_BUSY_MESSAGE);
+        }
         return "redirect:/";
     }
 

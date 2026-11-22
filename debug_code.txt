@@ -1,0 +1,1698 @@
+﻿=== ApiController.java ===
+package com.khatapilot.web;
+
+import com.khatapilot.backtest.BacktestService;
+import com.khatapilot.backtest.BacktestService.BacktestResult;
+import com.khatapilot.config.DemoLock;
+import com.khatapilot.config.SampleDataLoader;
+import com.khatapilot.forecast.CashForecastResult;
+import com.khatapilot.forecast.CashForecastService;
+import com.khatapilot.forecast.CashForecastService.DelayScenarioResult;
+import com.khatapilot.forecast.DailyForecast;
+import com.khatapilot.forecast.RescuePlanService;
+import com.khatapilot.forecast.RescuePlanService.Action;
+import com.khatapilot.forecast.RescuePlanService.RescuePlan;
+import com.khatapilot.model.Invoice;
+import com.khatapilot.model.PaymentMethod;
+import com.khatapilot.model.RecurringBill;
+import com.khatapilot.model.Student;
+import com.khatapilot.repository.RecurringBillRepository;
+import com.khatapilot.repository.StudentRepository;
+import com.khatapilot.service.DashboardService;
+import com.khatapilot.service.DashboardService.Summary;
+import com.khatapilot.service.InvoiceService;
+import com.khatapilot.service.RecurringBillService;
+import com.khatapilot.service.ReminderService;
+import com.khatapilot.service.StudentService;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.YearMonth;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * JSON API for the single-page dashboard. Percent values from the services (0-100) are exposed as
+ * fractions (0-1) under keys named {@code *Prob}. Money values are passed through unchanged.
+ */
+@RestController
+@RequestMapping("/api")
+public class ApiController {
+
+    private static final long FORECAST_SEED = 42L;
+    private static final int DEFAULT_HORIZON = 30;
+    private static final int MAX_HORIZON = 365;
+    private static final int DEFAULT_DELAY_DAYS = 15;
+    private static final int MAX_DELAY_DAYS = 365;
+    private static final DateTimeFormatter LABEL_FORMAT = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH);
+
+    /** Payment request body. Null {@code date} defaults to today, null {@code method} defaults to UPI. */
+    public record PaymentRequest(BigDecimal amount, LocalDate date, PaymentMethod method) {}
+
+    /** Invoice creation body. */
+    public record InvoiceRequest(Long studentId, BigDecimal amount, LocalDate issueDate, LocalDate dueDate,
+                                 String billingMonth) {}
+
+    /** Student creation body. */
+    public record StudentRequest(String name, BigDecimal monthlyFee, String notes) {}
+
+    /** Recurring bill creation body. */
+    public record BillRequest(String name, BigDecimal amount, int dayOfMonth, int graceDays) {}
+
+    private final CashForecastService cashForecastService;
+    private final RescuePlanService rescuePlanService;
+    private final BacktestService backtestService;
+    private final DashboardService dashboardService;
+    private final DemoLock demoLock;
+    private final SampleDataLoader sampleDataLoader;
+    private final InvoiceService invoiceService;
+    private final StudentService studentService;
+    private final StudentRepository studentRepository;
+    private final RecurringBillService recurringBillService;
+    private final RecurringBillRepository recurringBillRepository;
+
+    public ApiController(CashForecastService cashForecastService,
+                         RescuePlanService rescuePlanService,
+                         BacktestService backtestService,
+                         DashboardService dashboardService,
+                         DemoLock demoLock,
+                         SampleDataLoader sampleDataLoader,
+                         InvoiceService invoiceService,
+                         StudentService studentService,
+                         StudentRepository studentRepository,
+                         RecurringBillService recurringBillService,
+                         RecurringBillRepository recurringBillRepository) {
+        this.cashForecastService = cashForecastService;
+        this.rescuePlanService = rescuePlanService;
+        this.backtestService = backtestService;
+        this.dashboardService = dashboardService;
+        this.demoLock = demoLock;
+        this.sampleDataLoader = sampleDataLoader;
+        this.invoiceService = invoiceService;
+        this.studentService = studentService;
+        this.studentRepository = studentRepository;
+        this.recurringBillService = recurringBillService;
+        this.recurringBillRepository = recurringBillRepository;
+    }
+
+    // ---------------------------------------------------------------- dashboard
+
+    /**
+     * Dashboard payload. Keys: base, baseline, preview, openingCash, riskBannerText, rescueCards, chase, kpis, monthly.
+     * {@code preview} is null unless {@code whatIfStudentId} or {@code whatIfDelayDays} is supplied.
+     * {@code activeCardIds} marks matching rescue cards with {@code active: true}; it does not change any math.
+     */
+    @GetMapping("/dashboard")
+    public Map<String, Object> dashboard(@RequestParam(defaultValue = "30") int horizon,
+                                         @RequestParam(required = false) Long whatIfStudentId,
+                                         @RequestParam(required = false) Integer whatIfDelayDays,
+                                         @RequestParam(required = false) String activeCardIds) {
+        if (horizon < 1 || horizon > MAX_HORIZON) {
+            throw new IllegalArgumentException("horizon must be between 1 and " + MAX_HORIZON);
+        }
+        LocalDate today = LocalDate.now();
+        LocalDate target = rescueTarget(today);
+        // The simulator rejects a target outside its horizon, so pass it only when it falls inside.
+        LocalDate horizonTarget = target != null && !target.isAfter(today.plusDays(horizon - 1L)) ? target : null;
+
+        CashForecastResult forecast = cashForecastService.forecast(today, horizon, horizonTarget, FORECAST_SEED);
+        RescuePlan plan = rescuePlanService.plan(today, horizonTarget, horizon);
+        Summary summary = dashboardService.summary(today);
+
+        Map<String, Object> base = new LinkedHashMap<>();
+        List<String> labels = new ArrayList<>();
+        List<Double> p10 = new ArrayList<>();
+        List<Double> p50 = new ArrayList<>();
+        List<Double> p90 = new ArrayList<>();
+        for (DailyForecast day : forecast.days()) {
+            labels.add(day.date().format(LABEL_FORMAT));
+            p10.add(round2(day.worstCase().doubleValue()));
+            p50.add(round2(day.mostLikely().doubleValue()));
+            p90.add(round2(day.bestCase().doubleValue()));
+        }
+        base.put("labels", labels);
+        base.put("p10", p10);
+        base.put("p50", p50);
+        base.put("p90", p90);
+        // Forecast probability is 0-100; exposed as a fraction.
+        base.put("shortfallProb", forecast.probabilityBelowZeroBeforeTarget() / 100.0);
+
+        Map<String, Object> baseline = new LinkedHashMap<>();
+        // RescuePlan.baselineShortfallPercent is 0-100; exposed as a fraction.
+        baseline.put("shortfallProb", plan.baselineShortfallPercent() / 100.0);
+
+        Object preview = null;
+        if (whatIfStudentId != null || whatIfDelayDays != null) {
+            int delay = clamp(whatIfDelayDays == null ? DEFAULT_DELAY_DAYS : whatIfDelayDays, 0, MAX_DELAY_DAYS);
+            DelayScenarioResult scenario =
+                    cashForecastService.simulateDelay(today, horizon, target, whatIfStudentId, delay);
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("labels", scenario.after().labels());
+            p.put("p50", roundAll(scenario.after().p50()));
+            // shortfallAfter is 0-100 from CashForecastService; exposed as a fraction.
+            p.put("shortfallProb", scenario.shortfallAfter() / 100.0);
+            preview = p;
+        }
+
+        Set<String> active = new HashSet<>();
+        if (activeCardIds != null) {
+            for (String id : activeCardIds.split(",")) {
+                String trimmed = id.trim();
+                if (!trimmed.isEmpty()) {
+                    active.add(trimmed);
+                }
+            }
+        }
+        List<Map<String, Object>> cards = new ArrayList<>();
+        List<Action> actions = plan.cards();
+        for (int i = 0; i < actions.size(); i++) {
+            Action action = actions.get(i);
+            Map<String, Object> card = new LinkedHashMap<>();
+            card.put("id", action.id());
+            card.put("type", action.type());
+            card.put("title", action.title());
+            card.put("studentId", action.studentId());
+            card.put("invoiceId", action.invoiceId());
+            card.put("expectedCashRecovered", action.expectedCashRecovered());
+            card.put("cost", action.cost());
+            card.put("reason", action.reason());
+            card.put("estimate", action.estimate());
+            card.put("beforeRisk", plan.baselineShortfallPercent() / 100.0);
+            // riskAfterAloneByCard is aligned with cards and is 0-100; exposed as a fraction.
+            card.put("afterRisk", i < plan.riskAfterAloneByCard().size()
+                    ? plan.riskAfterAloneByCard().get(i) / 100.0
+                    : null);
+            card.put("active", active.contains(action.id()));
+            cards.add(card);
+        }
+
+        List<Map<String, Object>> chase = new ArrayList<>();
+        for (var suggestion : summary.chaseSuggestions()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("name", suggestion.studentName());
+            row.put("amount", suggestion.overdueAmount());
+            row.put("daysLate", suggestion.daysOverdue());
+            row.put("whatsappUrl", ReminderService.whatsappUrl(suggestion.message()));
+            chase.add(row);
+        }
+
+        Map<String, Object> kpis = new LinkedHashMap<>();
+        kpis.put("expectedMonthlyFees", summary.expectedMonthlyFees());
+        kpis.put("collectedThisMonth", summary.collectedThisMonth());
+        kpis.put("pendingDues", summary.pendingDues());
+        kpis.put("overdueDues", summary.overdueDues());
+        kpis.put("upcomingBillsTotal", summary.upcomingBillsTotal());
+        kpis.put("expectedCoverage", summary.expectedCoverage());
+        kpis.put("shortfallRisk", summary.shortfallRisk());
+        kpis.put("shortfallAmount", summary.shortfallAmount());
+
+        List<Map<String, Object>> monthly = new ArrayList<>();
+        for (DashboardService.MonthPoint point : summary.trend()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("month", point.month());
+            row.put("billed", point.billed());
+            row.put("collected", point.collected());
+            monthly.add(row);
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("base", base);
+        out.put("baseline", baseline);
+        out.put("preview", preview);
+        out.put("openingCash", forecast.openingBalance());
+        out.put("riskBannerText", plan.healthy() ? plan.healthyMessage() : plan.notice());
+        out.put("rescueCards", cards);
+        out.put("chase", chase);
+        out.put("kpis", kpis);
+        out.put("monthly", monthly);
+        return out;
+    }
+
+    // ---------------------------------------------------------------- demo
+
+    /** Replaces data with the bad-day crisis, then returns the default dashboard. 409 if the demo is busy. */
+    @PostMapping("/demo/bad-day")
+    public Map<String, Object> loadBadDayDemo() {
+        return runDemo(sampleDataLoader::loadBadDayDemo);
+    }
+
+    /** Restores the sample data, then returns the default dashboard. 409 if the demo is busy. */
+    @PostMapping("/demo/reset")
+    public Map<String, Object> resetDemo() {
+        return runDemo(sampleDataLoader::resetToSampleData);
+    }
+
+    private Map<String, Object> runDemo(Runnable action) {
+        if (!demoLock.tryRun(action)) {
+            throw new IllegalStateException("Demo is busy");
+        }
+        return dashboard(DEFAULT_HORIZON, null, null, null);
+    }
+
+    // ---------------------------------------------------------------- invoices
+
+    @GetMapping("/invoices")
+    public List<Map<String, Object>> listInvoices() {
+        LocalDate today = LocalDate.now();
+        return invoiceService.listAll().stream().map(inv -> invoiceMap(inv, today)).toList();
+    }
+
+    @PostMapping("/invoices")
+    public ResponseEntity<Map<String, Object>> createInvoice(@RequestBody InvoiceRequest request) {
+        if (request == null || request.studentId() == null) {
+            throw new IllegalArgumentException("studentId is required");
+        }
+        Student student = studentRepository.findById(request.studentId())
+                .orElseThrow(() -> new IllegalArgumentException("Student not found: " + request.studentId()));
+        Invoice invoice = invoiceService.createInvoice(student, request.amount(), request.issueDate(),
+                request.dueDate(), request.billingMonth());
+        return ResponseEntity.status(HttpStatus.CREATED).body(invoiceMap(invoice, LocalDate.now()));
+    }
+
+    /** Records a partial or full payment; the service sets PARTLY_PAID or PAID. Returns the updated invoice. */
+    @PostMapping("/invoices/{id}/pay")
+    public Map<String, Object> payInvoice(@PathVariable Long id, @RequestBody PaymentRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Payment body is required");
+        }
+        LocalDate date = request.date() == null ? LocalDate.now() : request.date();
+        PaymentMethod method = request.method() == null ? PaymentMethod.UPI : request.method();
+        invoiceService.recordPayment(id, request.amount(), date, method);
+        return invoiceMap(invoiceService.getInvoice(id), LocalDate.now());
+    }
+
+    private static Map<String, Object> invoiceMap(Invoice invoice, LocalDate today) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", invoice.getId());
+        map.put("studentId", invoice.getStudent() == null ? null : invoice.getStudent().getId());
+        map.put("studentName", invoice.getStudent() == null ? null : invoice.getStudent().getName());
+        map.put("amount", invoice.getAmount());
+        map.put("paid", invoice.amountPaid());
+        map.put("dueDate", invoice.getDueDate());
+        map.put("status", invoice.effectiveStatus(today).name());
+        map.put("billingMonth", invoice.getBillingMonth());
+        return map;
+    }
+
+    // ---------------------------------------------------------------- students
+
+    @GetMapping("/students")
+    public List<Map<String, Object>> listStudents() {
+        return studentService.listAll().stream().map(ApiController::studentMap).toList();
+    }
+
+    @PostMapping("/students")
+    public ResponseEntity<Map<String, Object>> createStudent(@RequestBody StudentRequest request) {
+        if (request == null || request.name() == null || request.name().isBlank()) {
+            throw new IllegalArgumentException("Student name is required");
+        }
+        if (request.monthlyFee() == null || request.monthlyFee().signum() < 0) {
+            throw new IllegalArgumentException("Monthly fee must be zero or positive");
+        }
+        Student student = studentService.create(request.name(), request.monthlyFee(), request.notes());
+        return ResponseEntity.status(HttpStatus.CREATED).body(studentMap(student));
+    }
+
+    private static Map<String, Object> studentMap(Student student) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", student.getId());
+        map.put("name", student.getName());
+        map.put("fee", student.getMonthlyFee());
+        map.put("notes", student.getNotes());
+        return map;
+    }
+
+    // ---------------------------------------------------------------- bills
+
+    @GetMapping("/bills")
+    public List<Map<String, Object>> listBills() {
+        return recurringBillService.listAll().stream().map(ApiController::billMap).toList();
+    }
+
+    @PostMapping("/bills")
+    public ResponseEntity<Map<String, Object>> createBill(@RequestBody BillRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("Bill body is required");
+        }
+        if (request.dayOfMonth() < 1 || request.dayOfMonth() > 31) {
+            throw new IllegalArgumentException("Day of month must be between 1 and 31");
+        }
+        if (request.graceDays() < 0) {
+            throw new IllegalArgumentException("Grace days cannot be negative");
+        }
+        RecurringBill bill = recurringBillService.create(request.name(), request.amount(),
+                request.dayOfMonth(), request.graceDays());
+        return ResponseEntity.status(HttpStatus.CREATED).body(billMap(bill));
+    }
+
+    private static Map<String, Object> billMap(RecurringBill bill) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", bill.getId());
+        map.put("name", bill.getName());
+        map.put("amount", bill.getAmount());
+        map.put("dueDay", bill.getDayOfMonth());
+        map.put("grace", bill.getGraceDays());
+        return map;
+    }
+
+    // ---------------------------------------------------------------- backtest
+
+    /**
+     * Backtest output. Checkpoints: month, prob (predicted shortfall, 0-1), observed (actual shortfall, boolean),
+     * checkpointDate. Buckets: label, checkpoints, meanPredictedProb (0-1), observedShortfallProb (0-1).
+     */
+    @GetMapping("/backtest")
+    public Map<String, Object> backtest() {
+        BacktestResult result = backtestService.runBacktest();
+
+        List<Map<String, Object>> checkpoints = new ArrayList<>();
+        for (BacktestService.Checkpoint c : result.checkpoints()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("checkpointDate", c.checkpointDate());
+            row.put("month", c.month());
+            row.put("prob", c.predictedShortfallPercent() / 100.0);
+            row.put("observed", c.actualShortfall());
+            checkpoints.add(row);
+        }
+
+        List<Map<String, Object>> buckets = new ArrayList<>();
+        for (BacktestService.BucketRow b : result.buckets()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("label", b.label());
+            row.put("checkpoints", b.checkpoints());
+            row.put("meanPredictedProb", b.meanPredictedPercent() / 100.0);
+            row.put("observedShortfallProb", b.observedShortfallPercent() / 100.0);
+            buckets.add(row);
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("checkpoints", checkpoints);
+        out.put("buckets", buckets);
+        return out;
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    /** Target date for the rescue plan: the next big bill's due date plus its grace days, or null if no bills. */
+    private LocalDate rescueTarget(LocalDate today) {
+        RecurringBill bill = nextBigBill(today);
+        return bill == null ? null : nextDueDate(bill, today).plusDays(bill.getGraceDays());
+    }
+
+    /** The bill whose next due date is soonest (ties go to the larger amount), or null if there are no bills. */
+    private RecurringBill nextBigBill(LocalDate today) {
+        RecurringBill next = null;
+        LocalDate nextDue = null;
+        for (RecurringBill bill : recurringBillRepository.findAll()) {
+            LocalDate due = nextDueDate(bill, today);
+            if (next == null || due.isBefore(nextDue)
+                    || (due.isEqual(nextDue) && bill.getAmount().compareTo(next.getAmount()) > 0)) {
+                next = bill;
+                nextDue = due;
+            }
+        }
+        return next;
+    }
+
+    /** Next due date on or after today (grace excluded). */
+    private static LocalDate nextDueDate(RecurringBill bill, LocalDate today) {
+        LocalDate due = bill.dueDateFor(YearMonth.from(today));
+        if (due.isBefore(today)) {
+            due = bill.dueDateFor(YearMonth.from(today).plusMonths(1));
+        }
+        return due;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static List<Double> roundAll(List<Double> values) {
+        List<Double> out = new ArrayList<>(values.size());
+        for (Double v : values) {
+            out.add(round2(v));
+        }
+        return out;
+    }
+
+    private static double round2(double value) {
+        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).doubleValue();
+    }
+}
+
+=== static/index.html ===
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KhataPilot â€” cash-flow demo</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+<style>
+/* ===== KhataPilot light theme (presentation only) ===== */
+body{background:#F5F5F7;font-variant-numeric:tabular-nums;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;color:#111827;-webkit-font-smoothing:antialiased;}
+table,td,th,.num{font-variant-numeric:tabular-nums;}
+
+/* Sticky white navbar, 64px: brand | pill tabs | actions */
+.kp-nav{position:sticky;top:0;z-index:1030;height:64px;padding:0;background:#fff;border-bottom:1px solid #E5E7EB;}
+.kp-nav-inner{height:100%;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:16px;}
+.kp-brand{display:flex;align-items:center;gap:10px;justify-self:start;min-width:0;}
+.kp-logo{width:32px;height:32px;border-radius:8px;background:#1D63ED;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:1rem;flex-shrink:0;}
+.kp-brand-name{font-weight:700;font-size:1.05rem;color:#111827;letter-spacing:-.01em;white-space:nowrap;}
+.kp-tabs{--bs-nav-pills-link-active-bg:#fff;--bs-nav-pills-link-active-color:#111827;display:flex;flex-wrap:nowrap;gap:2px;padding:4px;margin:0;background:#F1F5F9;border-radius:999px;justify-self:center;max-width:100%;overflow-x:auto;scrollbar-width:none;}
+.kp-tabs::-webkit-scrollbar{display:none;}
+.kp-tabs .nav-item{flex-shrink:0;}
+.kp-tabs .nav-link{border-radius:999px;color:#4B5563;font-weight:500;font-size:.875rem;padding:.4rem .95rem;white-space:nowrap;transition:background .15s,color .15s,box-shadow .15s;}
+.kp-tabs .nav-link:hover{color:#111827;}
+.kp-tabs .nav-link.active{background:#fff;color:#111827;box-shadow:0 1px 2px rgba(0,0,0,.08),0 1px 3px rgba(0,0,0,.06);}
+.kp-nav-actions{display:flex;gap:8px;align-items:center;justify-self:end;}
+.kp-btn-demo.btn{border-radius:999px;font-weight:500;font-size:.8rem;padding:.38rem .95rem;color:#111827;background:#fff;border:1px solid #D1D5DB;white-space:nowrap;}
+.kp-btn-demo.btn:hover{background:#F9FAFB;color:#111827;border-color:#9CA3AF;}
+.kp-btn-ghost.btn{border-radius:999px;font-weight:500;font-size:.8rem;padding:.38rem .95rem;color:#6B7280;background:transparent;border:1px solid transparent;white-space:nowrap;}
+.kp-btn-ghost.btn:hover{color:#111827;background:#F3F4F6;}
+.kp-subhead{background:#fff;border-bottom:1px solid #E5E7EB;font-size:.82rem;color:#6B7280;padding:6px 0;}
+main.kp-main{padding-top:20px !important;padding-bottom:32px;}
+
+/* Cards: white, 16px radius, hairline border, two-layer soft shadow */
+.kp-card{background:#FFFFFF;border-radius:16px;border:1px solid #E5E7EB;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 4px 12px rgba(0,0,0,0.03);padding:20px;margin:0;min-width:0;}
+.kp-card > h2.h6{font-size:.95rem;font-weight:600;color:#111827;letter-spacing:-.01em;margin-bottom:12px;}
+.kp-card-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px;}
+.kp-card-head-left{display:flex;flex-wrap:wrap;align-items:center;gap:12px;}
+.kp-card-title{font-size:.95rem;font-weight:600;color:#111827;letter-spacing:-.01em;margin:0;}
+.kp-text-danger{color:#991B1B !important;}
+
+/* Dashboard row layout: 20px gaps */
+.kp-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px;}
+.kp-row{display:grid;gap:20px;margin-bottom:20px;}
+.kp-row-mid,.kp-row-bottom{grid-template-columns:1.85fr 1fr;}
+.kp-row > .kp-card{height:100%;}
+
+/* Shortfall banner */
+.kp-banner{display:flex;align-items:center;gap:12px;border-radius:12px;padding:12px 16px;margin-bottom:20px;font-size:.92rem;color:#111827;}
+.kp-banner-risk{background:#FFFBEB;border-left:4px solid #D97706;}
+.kp-banner-ok{background:#ECFDF5;border:1px solid #A7F3D0;padding:10px 16px;font-size:.85rem;color:#065F46;}
+.kp-banner-icon{display:inline-flex;align-items:center;justify-content:center;color:#B45309;flex-shrink:0;font-weight:700;}
+.kp-banner-ok .kp-banner-icon{color:#059669;}
+.kp-banner-msg{flex:1 1 auto;min-width:0;}
+.kp-btn-primary.btn{background:#1D63ED;border:1px solid #1D63ED;color:#fff;border-radius:999px;font-weight:500;font-size:.8rem;padding:.35rem .9rem;white-space:nowrap;}
+.kp-btn-primary.btn:hover{background:#1852C9;border-color:#1852C9;color:#fff;}
+.kp-banner .kp-btn-primary.btn{margin-left:auto;}
+
+/* KPI cards */
+.kp-kpi{padding:16px 20px;}
+.kp-kpi-label{font-size:.8rem;color:#6B7280;font-weight:500;}
+.kp-kpi-val{font-size:1.5rem;font-weight:700;letter-spacing:-.02em;margin-top:4px;color:#111827;font-variant-numeric:tabular-nums;}
+.kp-kpi-sub{font-size:.8rem;color:#9CA3AF;margin-top:2px;}
+
+/* Forecast card */
+.kp-forecast{display:flex;flex-direction:column;}
+.kp-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.78rem;color:#6B7280;}
+.kp-legend-item{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
+.kp-sw{display:inline-block;width:16px;height:0;border-top:2px solid #1D63ED;}
+.kp-sw-band{height:10px;width:16px;border:0;background:rgba(29,99,237,0.12);border-radius:3px;}
+.kp-sw-target{border-top:2px dashed #9CA3AF;}
+.kp-sw-line{border-top:2px solid #1D63ED;}
+.kp-chart-wrap{position:relative;height:330px;}
+.kp-note{font-size:.75rem;color:#9CA3AF;margin-top:8px;}
+.kp-sim{border-top:1px solid #F1F5F9;padding-top:12px;margin-top:12px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;}
+.kp-sim-controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px;}
+.kp-sim-label{font-size:.8rem;color:#6B7280;font-weight:500;margin:0 2px 0 0;}
+.kp-select.form-select{width:auto;border-radius:999px;border-color:#E5E7EB;font-size:.8rem;padding:.25rem 2rem .25rem .75rem;}
+.kp-sim-readout{font-size:.85rem;color:#374151;font-variant-numeric:tabular-nums;}
+.kp-sim-readout strong{color:#111827;}
+
+/* Segmented pill toggle */
+.kp-seg{display:inline-flex;background:#F1F5F9;border-radius:999px;padding:3px;gap:2px;}
+.kp-seg-btn{border:0;background:transparent;border-radius:999px;padding:.25rem .8rem;font-size:.78rem;font-weight:500;color:#6B7280;line-height:1.4;}
+.kp-seg-btn:hover{color:#111827;}
+.kp-seg-btn.active{background:#fff;color:#111827;box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:600;}
+
+/* Chase today */
+.kp-pill-overdue{display:inline-flex;align-items:center;padding:.25rem .75rem;border-radius:999px;background:#DC2626;color:#fff;font-size:.75rem;font-weight:600;white-space:nowrap;}
+.kp-aging{display:flex;gap:3px;height:12px;border-radius:999px;overflow:hidden;background:#F1F5F9;}
+.kp-age{display:block;height:100%;min-width:0;}
+.kp-age-1{background:#F59E0B;}
+.kp-age-2{background:#F97316;}
+.kp-age-3{background:#DC2626;}
+.kp-aging-labels{display:flex;justify-content:space-between;gap:8px;font-size:.72rem;color:#6B7280;margin:6px 0 12px;}
+.kp-chase-list{display:flex;flex-direction:column;}
+.kp-chase-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid #F1F5F9;}
+.kp-chase-item:first-child{border-top:0;}
+.kp-avatar{width:34px;height:34px;border-radius:50%;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:.85rem;flex-shrink:0;}
+.kp-chase-main{flex:1 1 auto;min-width:0;}
+.kp-chase-name{font-size:.9rem;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.kp-chase-detail{font-size:.78rem;color:#6B7280;}
+.kp-chase-item .btn{padding:.25rem .75rem;font-size:.78rem;}
+
+/* Rescue Plan */
+.kp-pill-risk{display:inline-flex;align-items:center;padding:.25rem .75rem;border-radius:999px;background:#DCFCE7;color:#15803D;font-size:.75rem;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.kp-rescue-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+.kp-action{display:flex;flex-direction:column;gap:10px;border:1px solid #E5E7EB;border-radius:12px;padding:12px;margin:0;cursor:pointer;background:#fff;transition:background .15s,border-color .15s;}
+.kp-action:hover{background:#F9FAFB;}
+.kp-action-num{width:24px;height:24px;border-radius:50%;background:#EFF5FF;color:#1D63ED;display:inline-flex;align-items:center;justify-content:center;font-size:.78rem;font-weight:700;}
+.kp-action-body{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.kp-action-title{font-size:.88rem;font-weight:600;color:#111827;line-height:1.3;}
+.kp-action-gain{font-size:.78rem;color:#15803D;font-weight:500;}
+.kp-switch{position:relative;display:inline-flex;align-self:flex-start;width:40px;height:24px;margin-top:auto;}
+.kp-switch-input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:1;}
+.kp-switch-track{position:absolute;inset:0;border-radius:999px;background:#D1D5DB;transition:background-color .2s;pointer-events:none;}
+.kp-switch-track::before{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .2s;}
+.kp-switch-input:checked + .kp-switch-track{background:#1D63ED;}
+.kp-switch-input:checked + .kp-switch-track::before{transform:translateX(16px);}
+.kp-switch-input:focus-visible + .kp-switch-track{outline:2px solid rgba(29,99,237,.45);outline-offset:2px;}
+
+/* Value this month */
+.kp-value-body{text-align:center;padding:18px 0 8px;}
+.kp-value-fig{font-size:2.6rem;font-weight:700;color:#16A34A;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;}
+.kp-value-note{font-size:.78rem;color:#6B7280;margin-top:8px;}
+
+/* Status pills (kept for existing badges) */
+.kp-tag{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.72rem;font-weight:600;white-space:nowrap;}
+.kp-tag-ok{background:#DCFCE7;color:#047857;}
+
+/* Tables */
+.table{--bs-table-bg:transparent;}
+.table thead th{background:#F8FAFC;font-size:.72rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:#64748B;border-bottom:1px solid #E5E7EB;padding:.6rem .75rem;white-space:nowrap;}
+.table td{padding:.7rem .75rem;border-color:#F1F5F9;color:#1F2937;vertical-align:middle;}
+.table tbody tr:hover td{background:#F8FAFC;}
+.table-responsive{border-radius:12px;}
+
+/* Status badges: crisp pills keyed off the existing text-bg-* classes */
+.badge{border-radius:999px;padding:.35em .7em;font-weight:600;font-size:.7rem;letter-spacing:.02em;}
+.badge.text-bg-success{background-color:#DCFCE7 !important;color:#166534 !important;}
+.badge.text-bg-warning{background-color:#FEF3C7 !important;color:#92400E !important;}
+.badge.text-bg-danger{background-color:#FFE4E6 !important;color:#9F1239 !important;}
+.badge.text-bg-primary{background-color:#DBEAFE !important;color:#1E40AF !important;}
+.badge.text-bg-secondary{background-color:#F1F5F9 !important;color:#475569 !important;}
+.badge[class*="text-bg-"]::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:currentColor;margin-right:6px;vertical-align:middle;}
+
+/* Buttons: #1D63ED primary, outline/ghost secondary */
+.btn{border-radius:10px;font-weight:500;}
+.btn-dark{--bs-btn-bg:#1D63ED;--bs-btn-border-color:#1D63ED;--bs-btn-hover-bg:#1852C9;--bs-btn-hover-border-color:#1852C9;--bs-btn-active-bg:#1852C9;--bs-btn-active-border-color:#1852C9;--bs-btn-focus-shadow-rgb:29,99,237;--bs-btn-color:#fff;--bs-btn-hover-color:#fff;--bs-btn-active-color:#fff;}
+.btn-outline-secondary{--bs-btn-color:#374151;--bs-btn-border-color:#E5E7EB;--bs-btn-hover-color:#111827;--bs-btn-hover-bg:#F3F4F6;--bs-btn-hover-border-color:#D1D5DB;--bs-btn-active-bg:#E5E7EB;--bs-btn-active-border-color:#D1D5DB;--bs-btn-active-color:#111827;background:#fff;}
+.btn-outline-dark{--bs-btn-color:#111827;--bs-btn-border-color:#E5E7EB;--bs-btn-hover-bg:#111827;--bs-btn-hover-border-color:#111827;--bs-btn-active-bg:#111827;--bs-btn-active-border-color:#111827;background:#fff;}
+.btn-outline-danger{--bs-btn-color:#BE123C;--bs-btn-border-color:#FECDD3;--bs-btn-hover-bg:#FFF1F2;--bs-btn-hover-border-color:#FDA4AF;--bs-btn-hover-color:#9F1239;--bs-btn-active-bg:#FFE4E6;--bs-btn-active-border-color:#FDA4AF;--bs-btn-active-color:#9F1239;}
+.btn-outline-success{--bs-btn-color:#047857;--bs-btn-border-color:#A7F3D0;--bs-btn-hover-bg:#ECFDF5;--bs-btn-hover-border-color:#6EE7B7;--bs-btn-hover-color:#065F46;--bs-btn-active-bg:#D1FAE5;--bs-btn-active-border-color:#6EE7B7;--bs-btn-active-color:#065F46;}
+.btn-success{--bs-btn-bg:#10B981;--bs-btn-border-color:#10B981;--bs-btn-hover-bg:#059669;--bs-btn-hover-border-color:#059669;--bs-btn-active-bg:#059669;--bs-btn-active-border-color:#059669;}
+
+/* Form controls */
+.form-control,.form-select{border-radius:10px;border-color:#E5E7EB;}
+.form-control:focus,.form-select:focus{border-color:#93B6F8;box-shadow:0 0 0 3px rgba(29,99,237,.12);}
+
+/* Modals */
+.modal-content{border:0;border-radius:16px;box-shadow:0 24px 48px -12px rgba(15,23,42,.25);overflow:hidden;}
+.modal-header{border-bottom:1px solid #F1F5F9;padding:18px 22px;}
+.modal-header .modal-title{font-size:1rem;font-weight:600;letter-spacing:-.01em;}
+.modal-body{padding:18px 22px;}
+.modal-footer{border-top:1px solid #F1F5F9;padding:14px 22px;}
+
+/* Responsive */
+@media (max-width: 1199.98px){
+  .kp-kpis{grid-template-columns:repeat(2,1fr);}
+  .kp-rescue-grid{grid-template-columns:repeat(2,1fr);}
+}
+@media (max-width: 991.98px){
+  .kp-nav{height:auto;}
+  .kp-nav-inner{grid-template-columns:1fr auto;padding:10px 16px;}
+  .kp-tabs{grid-column:1 / -1;justify-self:start;}
+  .kp-row-mid,.kp-row-bottom{grid-template-columns:1fr;}
+}
+@media (max-width: 767.98px){
+  .kp-nav-actions{grid-column:2;justify-self:end;}
+  .kp-brand-name{font-size:.95rem;}
+  .kp-rescue-grid{grid-template-columns:1fr;}
+  .kp-value-fig{font-size:2rem;}
+}
+
+</style>
+</head>
+<body>
+<nav class="navbar kp-nav">
+  <div class="kp-nav-inner px-3 px-lg-4">
+    <div class="kp-brand">
+      <span class="kp-logo" aria-hidden="true">K</span>
+      <span class="kp-brand-name">KhataPilot</span>
+    </div>
+    <ul class="nav nav-pills kp-tabs">
+      <li class="nav-item"><a class="nav-link" data-tab="dashboard" href="#/dashboard">Home</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="invoices" href="#/invoices">Invoices</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="students" href="#/students">Students</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="bills" href="#/bills">Bills</a></li>
+      <li class="nav-item"><a class="nav-link" data-tab="backtest" href="#/backtest">Backtest</a></li>
+    </ul>
+    <div class="kp-nav-actions">
+      <button id="btnBad" class="btn btn-sm kp-btn-demo">Load bad-day demo</button>
+      <button id="btnReset" class="btn btn-sm kp-btn-ghost">Reset</button>
+    </div>
+  </div>
+</nav>
+<div class="kp-subhead">
+  <div class="px-3 px-lg-4">Home tutor Â· <span id="subStudents">â€”</span> students Â· <span id="subMonth">â€”</span></div>
+</div>
+<main class="container-fluid px-3 px-lg-4 kp-main">
+
+  <!-- HOME / DASHBOARD -->
+  <section id="view-dashboard" class="view d-none">
+    <div id="riskBanner" class="kp-banner" role="status"></div>
+
+    <div class="kp-kpis">
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Expected monthly fees</div>
+        <div class="kp-kpi-val" id="kpiExpected">â‚¹38,400</div>
+        <div class="kp-kpi-sub" id="kpiExpectedSub">18 students</div>
+      </div>
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Collected this month</div>
+        <div class="kp-kpi-val" id="kpiCollected">â‚¹28,800</div>
+        <div class="kp-kpi-sub" id="kpiCollectedSub">13 of 18 paid</div>
+      </div>
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Overdue</div>
+        <div class="kp-kpi-val kp-text-danger" id="kpiOverdue">â‚¹9,600</div>
+        <div class="kp-kpi-sub" id="kpiOverdueSub">5 students late</div>
+      </div>
+      <div class="kp-card kp-kpi">
+        <div class="kp-kpi-label">Next big bill</div>
+        <div class="kp-kpi-val" id="kpiNextBill">â‚¹12,000</div>
+        <div class="kp-kpi-sub" id="kpiNextBillSub">Rent due on the 26th</div>
+      </div>
+    </div>
+
+    <div class="kp-row kp-row-mid">
+      <div class="kp-card kp-forecast">
+        <div class="kp-card-head">
+          <div class="kp-card-head-left">
+            <h2 class="kp-card-title">Cash forecast</h2>
+            <div class="kp-seg" role="group" aria-label="Forecast horizon">
+              <button type="button" class="kp-seg-btn" data-h="30">30d</button>
+              <button type="button" class="kp-seg-btn" data-h="60">60d</button>
+            </div>
+            <select id="horizon" class="d-none" aria-hidden="true" tabindex="-1">
+              <option value="30">30 days</option><option value="60">60 days</option><option value="90">90 days</option>
+            </select>
+          </div>
+          <div class="kp-legend">
+            <span class="kp-legend-item"><span class="kp-sw kp-sw-band"></span>Likely range</span>
+            <span class="kp-legend-item"><span class="kp-sw kp-sw-target"></span>Target rent</span>
+            <span class="kp-legend-item"><span class="kp-sw kp-sw-line"></span>Most likely</span>
+          </div>
+        </div>
+        <div class="kp-chart-wrap"><canvas id="fcChart"></canvas></div>
+        <div class="kp-note">P10â€“P90 band from 1,000 seeded runs (seed 42). Dashed green line previews the toggled Rescue Plan actions.</div>
+        <div class="kp-sim">
+          <div class="kp-sim-controls">
+            <label class="kp-sim-label" for="whatStudent">What ifâ€¦</label>
+            <select id="whatStudent" class="form-select form-select-sm kp-select"></select>
+            <label class="kp-sim-label" for="whatDelay">That student pays</label>
+            <select id="whatDelay" class="form-select form-select-sm kp-select">
+              <option value="7">+7 days</option><option value="14">+14 days</option><option value="30">+30 days</option><option value="none">doesn't pay</option>
+            </select>
+            <button type="button" id="btnApply" class="btn btn-sm kp-btn-primary">Apply</button>
+          </div>
+          <div class="kp-sim-readout">Chance of running short: <strong id="whatIfReadout">â€”</strong></div>
+        </div>
+      </div>
+
+      <div class="kp-card kp-chase">
+        <div class="kp-card-head">
+          <h2 class="kp-card-title">Chase today</h2>
+          <span class="kp-pill-overdue" id="overduePill">â‚¹0 overdue</span>
+        </div>
+        <div class="kp-aging" id="agingBar"></div>
+        <div class="kp-aging-labels" id="agingLabels"></div>
+        <div class="kp-chase-list" id="chaseList"></div>
+      </div>
+    </div>
+
+    <div class="kp-row kp-row-bottom">
+      <div class="kp-card kp-rescue" id="rescuePlan">
+        <div class="kp-card-head">
+          <h2 class="kp-card-title">Rescue Plan</h2>
+          <span class="kp-pill-risk" id="riskBadge">Risk: â€”</span>
+        </div>
+        <div id="rescueList" class="kp-rescue-grid"></div>
+      </div>
+
+      <div class="kp-card kp-value">
+        <div class="kp-card-head">
+          <h2 class="kp-card-title">Value this month</h2>
+          <div class="kp-seg" role="group" aria-label="Recovery assumption">
+            <button type="button" class="kp-seg-btn" data-recovery="low">Low</button>
+            <button type="button" class="kp-seg-btn" data-recovery="medium">Medium</button>
+            <button type="button" class="kp-seg-btn" data-recovery="high">High</button>
+          </div>
+        </div>
+        <div class="kp-value-body">
+          <div class="kp-value-fig" id="valueFig">â‚¹0</div>
+          <div class="kp-value-note" id="valueNote"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- INVOICES -->
+  <section id="view-invoices" class="view d-none">
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="kp-card">
+          <h2 class="h6">New invoice</h2>
+          <form id="invForm" class="vstack gap-2">
+            <select id="invStudent" class="form-select form-select-sm" required></select>
+            <input id="invAmount" type="number" min="1" step="1" class="form-control form-control-sm" placeholder="Amount (â‚¹)" required>
+            <input id="invDue" type="date" class="form-control form-control-sm" required>
+            <select id="invStatus" class="form-select form-select-sm"><option value="DRAFT">DRAFT</option><option value="SENT">SENT</option></select>
+            <button class="btn btn-sm btn-dark">Create invoice</button>
+          </form>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="kp-card">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h2 class="h6 mb-0">Invoices</h2>
+            <select id="invFilter" class="form-select form-select-sm w-auto">
+              <option value="">All statuses</option><option>DRAFT</option><option>SENT</option><option>PARTLY_PAID</option><option>OVERDUE</option><option>PAID</option>
+            </select>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Student</th><th class="text-end">Amount</th><th class="text-end">Paid</th><th>Due</th><th>Status</th><th></th></tr></thead>
+              <tbody id="invBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STUDENTS -->
+  <section id="view-students" class="view d-none">
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="kp-card">
+          <h2 class="h6" id="stuFormTitle">Add student</h2>
+          <form id="stuForm" class="vstack gap-2">
+            <input type="hidden" id="stuId">
+            <input id="stuName" class="form-control form-control-sm" placeholder="Name" required>
+            <input id="stuPhone" class="form-control form-control-sm" placeholder="Phone (+91â€¦)" required>
+            <input id="stuFee" type="number" min="1" step="1" class="form-control form-control-sm" placeholder="Monthly fee (â‚¹)" required>
+            <select id="stuBehaviour" class="form-select form-select-sm">
+              <option value="on-time">on-time</option><option value="usually-late">usually-late</option><option value="rarely-pays">rarely-pays</option>
+            </select>
+            <div class="d-flex gap-2">
+              <button class="btn btn-sm btn-dark">Save student</button>
+              <button type="button" id="stuCancel" class="btn btn-sm btn-outline-secondary">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div class="col-lg-8">
+        <div class="kp-card">
+          <h2 class="h6">Students</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Name</th><th>Phone</th><th class="text-end">Fee</th><th>Behaviour</th><th></th></tr></thead>
+              <tbody id="stuBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BILLS -->
+  <section id="view-bills" class="view d-none">
+    <div class="kp-card">
+      <h2 class="h6">Recurring bills</h2>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>Bill</th><th>Amount (â‚¹)</th><th>Due day</th><th>Grace (days)</th><th></th></tr></thead>
+          <tbody id="billBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- BACKTEST -->
+  <section id="view-backtest" class="view d-none">
+    <div class="alert alert-info" role="alert"><strong>Backtest uses synthetic history generated for this demo â€” it is not real financial data.</strong></div>
+    <div class="row g-3">
+      <div class="col-lg-7">
+        <div class="kp-card">
+          <h2 class="h6">Monthly checkpoints, Januaryâ€“December 2025</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Checkpoint</th><th class="text-end">Forecast shortfall probability</th><th>Bucket</th><th>Observed outcome</th></tr></thead>
+              <tbody id="btBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-5">
+        <div class="kp-card">
+          <h2 class="h6">Calibration by bucket</h2>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Bucket</th><th>Definition</th><th class="text-end">Checkpoints</th><th class="text-end">Observed shortfall rate</th></tr></thead>
+              <tbody id="calBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Payment modal -->
+<div class="modal fade" id="payModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <form id="payForm" class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Record payment</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body vstack gap-2">
+        <div class="small" id="payInfo"></div>
+        <input type="hidden" id="payId">
+        <input id="payAmount" type="number" min="1" step="1" class="form-control" placeholder="Amount (â‚¹)" required>
+        <select id="payMethod" class="form-select"><option>UPI</option><option>Bank Transfer</option><option>Cash</option></select>
+      </div>
+      <div class="modal-footer"><button class="btn btn-dark">Save payment</button></div>
+    </form>
+  </div>
+</div>
+
+<!-- Remind modal -->
+<div class="modal fade" id="remindModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Send a WhatsApp reminder</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body" id="remindBody"></div>
+    </div>
+  </div>
+</div>
+<script>
+/* ===== Constants & helpers ===== */
+const KEY = 'khatapilot.v1';
+const DAY = 86400000;
+const $ = id => document.getElementById(id);
+const fmt = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' });
+const METHODS = ['UPI', 'Bank Transfer', 'Cash'];
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MONTHS_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const BEHAV = {
+  'on-time':     { pNon: 0.02, min: 0,  max: 4 },
+  'usually-late':{ pNon: 0.08, min: 3,  max: 14 },
+  'rarely-pays': { pNon: 0.30, min: 10, max: 40 }
+};
+const BEHAV_CYCLE = ['on-time','usually-late','on-time','usually-late','on-time','rarely-pays'];
+const NAMES = ['Aarav Sharma','Ananya Iyer','Rohan Mehta','Diya Patel','Kabir Singh','Ishita Gupta',
+  'Vihaan Reddy','Saanvi Nair','Arjun Kapoor','Myra Joshi','Reyansh Das','Tara Menon',
+  'Advait Kulkarni','Anvi Bhatt','Dhruv Chopra','Kiara Malhotra','Ayaan Khan','Prisha Agarwal'];
+const BILLS_DEFAULT = [
+  { id: 'rent', name: 'Rent', amount: 12000, dueDay: 5, grace: 0 },
+  { id: 'internet', name: 'Internet', amount: 999, dueDay: 10, grace: 3 },
+  { id: 'electricity', name: 'Electricity', amount: 1800, dueDay: 15, grace: 5 },
+  { id: 'supplies', name: 'Supplies', amount: 500, dueDay: 20, grace: 7 }
+];
+const BUCKETS = [
+  { label: '0â€“10%', def: 'p < 10%', lo: 0, hi: 0.10 },
+  { label: '10â€“30%', def: '10% â‰¤ p < 30%', lo: 0.10, hi: 0.30 },
+  { label: '30â€“50%', def: '30% â‰¤ p < 50%', lo: 0.30, hi: 0.50 },
+  { label: '50â€“70%', def: '50% â‰¤ p < 70%', lo: 0.50, hi: 0.70 },
+  { label: '70â€“100%', def: 'p â‰¥ 70%', lo: 0.70, hi: 1.01 }
+];
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const pad = n => String(n).padStart(2, '0');
+const isoDate = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const ymOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+function parseISO(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
+function midnight(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function addDays(d, n) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
+function dayDiff(a, b) { return Math.round((midnight(b) - midnight(a)) / DAY); }
+function fmtDate(d) { return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); }
+function ordinal(n) { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+
+/* Seeded PRNG (mulberry32) */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+/* ===== State (single versioned localStorage key) ===== */
+function studentTemplate(i) {
+  return {
+    id: 's' + (i + 1), name: NAMES[i],
+    phone: '+91 98' + String(10000000 + i * 37123).padStart(8, '0'),
+    fee: 1200 + ((i * 397) % 14) * 100,
+    behaviour: BEHAV_CYCLE[i % 6]
+  };
+}
+
+function seedState(today) {
+  const y = today.getFullYear(), m = today.getMonth();
+  const students = NAMES.map((_, i) => studentTemplate(i));
+  const invoices = [];
+  let n = 0;
+  const nid = () => 'inv' + (++n);
+  // 12 past PAID invoices per student (the 12 calendar months before this one)
+  students.forEach((s, i) => {
+    for (let k = 1; k <= 12; k++) {
+      const due = new Date(y, m - k, 5);
+      const late = s.behaviour === 'on-time' ? k % 3
+        : s.behaviour === 'usually-late' ? 4 + ((i + k) % 8)
+        : (k % 4 === 0 ? 0 : 15 + ((i * k) % 20));
+      invoices.push({ id: nid(), studentId: s.id, amount: s.fee, paid: s.fee, dueDate: isoDate(due), status: 'PAID',
+        payments: [{ date: isoDate(addDays(due, late)), amount: s.fee, method: METHODS[(i + k) % 3] }] });
+    }
+  });
+  // Current-month invoices with a mix of statuses
+  students.forEach((s, i) => {
+    const due = new Date(y, m, 5 + (i % 3) * 5);
+    let status, paid = 0, payments = [];
+    if (i < 2) status = 'OVERDUE';
+    else if (i < 5) { status = 'PARTLY_PAID'; paid = Math.floor(s.fee / 200) * 100; payments = [{ date: isoDate(today), amount: paid, method: METHODS[i % 3] }]; }
+    else if (i < 9) status = 'SENT';
+    else if (i === 9) status = 'DRAFT';
+    else { status = 'PAID'; paid = s.fee; payments = [{ date: isoDate(today), amount: s.fee, method: METHODS[i % 3] }]; }
+    invoices.push({ id: nid(), studentId: s.id, amount: s.fee, paid, dueDate: isoDate(due), status, payments });
+  });
+  return { version: 1, openingCash: 18400, students, invoices, bills: BILLS_DEFAULT.map(b => ({ ...b })) };
+}
+
+function loadState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (s && s.version === 1) return s;
+  } catch (e) { /* fall through to seed */ }
+  const fresh = seedState(new Date());
+  localStorage.setItem(KEY, JSON.stringify(fresh));
+  return fresh;
+}
+let state = loadState();
+function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
+
+/* ===== API client (Spring Boot backend, same origin) ===== */
+// Resolves with parsed JSON; rejects with the server's JSON "error" field when !ok.
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(path, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) { /* non-JSON body */ }
+  if (!res.ok) throw new Error((data && data.error) || ('Request failed (' + res.status + ')'));
+  return data;
+}
+// The page has no general message area, so errors are alerted.
+function showError(err) { alert(err && err.message ? err.message : String(err)); }
+function dashboardQuery(H, whatIf) {
+  const p = new URLSearchParams({ horizon: String(H) });
+  if (whatIf) { p.set('whatIfStudentId', whatIf.sid); p.set('whatIfDelayDays', whatIf.delay); }
+  if (rescueToggles.size) p.set('activeCardIds', [...rescueToggles].join(','));
+  return '/api/dashboard?' + p.toString();
+}
+async function loadLists() {
+  const [students, invoices, bills] = await Promise.all([
+    api('GET', '/api/students'), api('GET', '/api/invoices'), api('GET', '/api/bills')
+  ]);
+  state.students = students; state.invoices = invoices; state.bills = bills;
+}
+async function refreshAll() {
+  try { await loadLists(); renderAll(); } catch (err) { showError(err); }
+}
+
+/* ===== Bills & scenario building ===== */
+// Occurrences of a recurring bill (day-of-month) on/after today, as day offsets.
+function billOccurrences(bill, today, horizon) {
+  const out = [], y = today.getFullYear(), mo = today.getMonth();
+  for (let k = 0; k <= 3; k++) {
+    const dim = new Date(y, mo + k + 1, 0).getDate();
+    const cand = new Date(y, mo + k, Math.min(bill.dueDay, dim));
+    const off = dayDiff(today, cand);
+    if (off >= 0 && off <= horizon + 10) out.push({ offset: off, date: cand });
+  }
+  return out;
+}
+
+// Monte Carlo inputs -> scenario. Invoice inputs: outstanding, dueOffset, behaviour, chase, discount, addDelay, never.
+function buildScenario(p) {
+  const H = p.horizon;
+  const invoices = p.invoices.map(v => {
+    const b = BEHAV[v.behaviour], f = v.chase ? 0.5 : 1, add = v.addDelay || 0;
+    const dMin = Math.max(0, Math.round(b.min * f) + add);
+    return {
+      amount: v.outstanding, dueOffset: v.dueOffset, discount: !!v.discount,
+      pNon: v.never ? 1 : b.pNon * f,
+      dMin, dMax: Math.max(dMin, Math.round(b.max * f) + add)
+    };
+  });
+  const bills = [];
+  let windowDays = null;
+  p.bills.forEach(b => {
+    const occ = billOccurrences(b, p.today, H);
+    occ.forEach(o => bills.push({ name: b.name, amount: b.amount, offset: o.offset, grace: b.grace, shift: b.shift || 0 }));
+    if (b.id === p.majorId && occ.length) windowDays = occ[0].offset;
+  });
+  return {
+    horizon: H, start: p.start, dailyVar: p.dailyVar, invoices, bills,
+    windowDays: Math.min(H, Math.max(1, windowDays == null ? H : windowDays))
+  };
+}
+
+// One simulated path. Fixed RNG draw order so toggles/what-ifs stay comparable.
+function simulateRun(scn, rng, row) {
+  const H = scn.horizon, flows = new Float64Array(H + 1);
+  for (const v of scn.invoices) {
+    const u1 = rng(), u2 = rng(), u3 = rng();
+    if (v.discount && u3 < 0.6) {            // 5% early-pay discount accepted (60%): pays in days 1â€“5
+      const day = 1 + Math.floor(u3 / 0.6 * 5);
+      flows[Math.min(day, H)] += v.amount * 0.95;
+      continue;
+    }
+    if (u1 < v.pNon) continue;               // does not pay in this run
+    const delay = v.dMin + Math.floor(u2 * (v.dMax - v.dMin + 1));
+    const day = Math.max(1, v.dueOffset + delay);
+    if (day <= H) flows[day] += v.amount;
+  }
+  for (const b of scn.bills) {               // paid at due day + grace uncertainty
+    const u = rng();
+    const day = Math.max(1, b.offset + b.shift + Math.floor(u * (b.grace + 1)));
+    if (day <= H) flows[day] -= b.amount;
+  }
+  let bal = scn.start;
+  row[0] = bal;
+  for (let t = 1; t <= H; t++) {
+    bal += flows[t] - scn.dailyVar * (0.5 + rng());
+    row[t] = bal;
+  }
+}
+
+// 1,000 runs, seed 42 -> per-day P10/P50/P90 and shortfall probability before next Rent.
+function runForecast(scn, runs = 1000, seed = 42) {
+  const H = scn.horizon, W = scn.windowDays, stride = H + 1;
+  const buf = new Float64Array(runs * stride), rng = mulberry32(seed);
+  let short = 0;
+  for (let r = 0; r < runs; r++) {
+    const row = buf.subarray(r * stride, (r + 1) * stride);
+    simulateRun(scn, rng, row);
+    let mn = Infinity;
+    for (let t = 1; t <= W; t++) if (row[t] < mn) mn = row[t];
+    if (mn < 0) short++;
+  }
+  const p10 = [], p50 = [], p90 = [], col = new Float64Array(runs);
+  for (let t = 0; t <= H; t++) {
+    for (let r = 0; r < runs; r++) col[r] = buf[r * stride + t];
+    col.sort();
+    p10.push(col[Math.floor(0.1 * (runs - 1))]);
+    p50.push(col[Math.floor(0.5 * (runs - 1))]);
+    p90.push(col[Math.floor(0.9 * (runs - 1))]);
+  }
+  return { p10, p50, p90, shortfallProb: short / runs, windowDays: W, horizon: H };
+}
+
+// Live app state -> Monte Carlo inputs. o = {horizon, whatIf:{sid,delay}|null, toggles:Set}
+function liveInputs(st, today, o) {
+  const wi = o.whatIf;
+  const invoices = st.invoices
+    .filter(i => i.status !== 'PAID' && i.amount - i.paid > 0)
+    .map(i => {
+      const s = st.students.find(x => x.id === i.studentId);
+      if (!s) return null;
+      const hit = wi && wi.sid === s.id;
+      return {
+        outstanding: i.amount - i.paid,
+        dueOffset: dayDiff(today, parseISO(i.dueDate)),
+        behaviour: s.behaviour,
+        chase: o.toggles.has('chase:' + i.id),
+        discount: o.toggles.has('disc:' + i.id),
+        never: !!(hit && wi.delay === 'none'),
+        addDelay: hit && wi.delay !== 'none' ? Number(wi.delay) : 0
+      };
+    }).filter(Boolean);
+  const bills = st.bills.map(b => ({
+    id: b.id, name: b.name, amount: b.amount, dueDay: b.dueDay, grace: b.grace,
+    shift: o.toggles.has('shift:' + b.id) ? Math.min(3, b.grace) : 0
+  }));
+  return { today, start: st.openingCash, horizon: o.horizon, dailyVar: 250, invoices, bills, majorId: 'rent' };
+}
+
+/* ===== Backtest (synthetic 2025 checkpoints) ===== */
+function runBacktest() {
+  const students = NAMES.map((_, i) => studentTemplate(i));
+  const rows = [];
+  for (let m = 0; m < 12; m++) {
+    const today = new Date(2025, m, 1);
+    const invoices = students.map(s => ({ outstanding: s.fee, dueOffset: 4, behaviour: s.behaviour }));
+    const start = 1000 + ((m * 2317) % 8) * 1000;
+    const scn = buildScenario({ today, start, horizon: 30, dailyVar: 250, invoices, bills: BILLS_DEFAULT, majorId: 'rent' });
+    const fc = runForecast(scn);
+    // Observed: one synthetic realisation of the same month (separate seeded stream)
+    const row = new Float64Array(scn.horizon + 1);
+    simulateRun(scn, mulberry32(1000 + m), row);
+    let observed = false;
+    for (let t = 1; t <= scn.windowDays; t++) if (row[t] < 0) { observed = true; break; }
+    const bi = BUCKETS.findIndex(b => fc.shortfallProb >= b.lo && fc.shortfallProb < b.hi);
+    rows.push({ month: MONTHS_FULL[m] + ' 2025', prob: fc.shortfallProb, observed, bucket: bi });
+  }
+  return rows;
+}
+let backtestCache = null;
+
+/* ===== Chart.js (forecast) ===== */
+const khataPlugin = {
+  id: 'khataPlugin',
+  beforeDatasetsDraw(chart) {
+    const { ctx, chartArea: a, scales: { y } } = chart;
+    if (!a || y.min >= 0) return;
+    const z = y.getPixelForValue(0);
+    if (z <= a.top || z >= a.bottom) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(220,53,69,0.12)';            // danger zone below â‚¹0
+    ctx.fillRect(a.left, z, a.right - a.left, a.bottom - z);
+    ctx.restore();
+  },
+  afterDatasetsDraw(chart) {
+    const { ctx, chartArea: a, scales: { x } } = chart;
+    const marks = (chart.options.plugins.khataPlugin || {}).markers || [];
+    if (!a) return;
+    ctx.save();
+    ctx.strokeStyle = '#6c757d'; ctx.fillStyle = '#6c757d';
+    ctx.setLineDash([4, 4]); ctx.font = '11px sans-serif';
+    marks.forEach(m => {
+      const px = x.getPixelForValue(m.index);
+      if (px < a.left || px > a.right) return;
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+      ctx.fillText(m.label, px + 3, a.top + 12);
+    });
+    ctx.restore();
+  }
+};
+let fcChart = null;
+function drawChart(labels, res, preview, markers, rentAmt) {
+  const data = {
+    labels,
+    datasets: [
+      { label: 'P10', data: res.p10, borderColor: 'transparent', pointRadius: 0, fill: false },
+      { label: 'P10â€“P90 band', data: res.p90, borderColor: 'transparent', backgroundColor: 'rgba(29,99,237,0.12)', pointRadius: 0, fill: '-1' },
+      { label: 'Balance (P50)', data: res.p50, borderColor: '#1D63ED', borderWidth: 2, pointRadius: 0, stepped: true, fill: 'origin',
+        backgroundColor: ctx => {
+          const c = ctx.chart, a = c.chartArea;
+          if (!a) return 'rgba(29,99,237,0.10)';
+          const g = c.ctx.createLinearGradient(0, a.top, 0, a.bottom);
+          g.addColorStop(0, 'rgba(29,99,237,0.16)'); g.addColorStop(1, 'rgba(29,99,237,0)');
+          return g;
+        } },
+      { label: 'Preview (P50)', data: preview ? preview.p50 : [], borderColor: '#16A34A', borderDash: [6, 4], borderWidth: 2, pointRadius: 0, stepped: true, fill: false },
+      { label: 'Target rent', data: labels.map(() => rentAmt), borderColor: '#9CA3AF', borderDash: [5, 5], borderWidth: 1.5, pointRadius: 0, fill: false }
+    ]
+  };
+  const options = {
+    animation: false, responsive: true, maintainAspectRatio: false,
+    layout: { padding: { right: 28, top: 12 } },
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      khataPlugin: { markers }
+    },
+    scales: { y: { ticks: { callback: v => fmt.format(v) } }, x: { ticks: { maxTicksLimit: 10, autoSkip: true } } }
+  };
+  if (!fcChart) {
+    fcChart = new Chart($('fcChart'), { type: 'line', data, options, plugins: [khataPlugin] });
+  } else {
+    fcChart.data = data;
+    fcChart.options.plugins.khataPlugin = { markers };
+    fcChart.update('none');
+  }
+}
+
+
+/* ===== Rendering: dashboard ===== */
+let rescueToggles = new Set();
+
+// Value this month: recovery assumptions applied to overdue balances (illustrative rates)
+const RECOVERY = {
+  low:    { label: 'Conservative', rate: 0.3 },
+  medium: { label: 'Base', rate: 0.5 },
+  high:   { label: 'Optimistic', rate: 0.8 }
+};
+let recoveryLevel = 'medium';
+
+function rescueCards() {
+  const cards = [];
+  state.invoices
+    .filter(i => i.status === 'OVERDUE' || i.status === 'PARTLY_PAID')
+    .sort((a, b) => (b.amount - b.paid) - (a.amount - a.paid))
+    .forEach(i => {
+      const s = state.students.find(x => x.id === i.studentId); if (!s) return;
+      cards.push({ tid: 'chase:' + i.id, title: `Chase ${esc(s.name)}`,
+        gain: `+${fmt.format(i.amount - i.paid)} expected` });
+    });
+  state.invoices
+    .filter(i => i.status !== 'PAID' && i.status !== 'DRAFT' && i.amount - i.paid > 0)
+    .sort((a, b) => b.amount - a.amount).slice(0, 3)
+    .forEach(i => {
+      const s = state.students.find(x => x.id === i.studentId); if (!s) return;
+      cards.push({ tid: 'disc:' + i.id, title: `Offer ${esc(s.name)} 5% off`,
+        gain: `+${fmt.format((i.amount - i.paid) * 0.6 * 0.95)} expected (60% accept)` });
+    });
+  state.bills.filter(b => b.grace >= 3).forEach(b => {
+    cards.push({ tid: 'shift:' + b.id, title: `Shift ${esc(b.name)} due date by 3 days`,
+      gain: `Timing only Â· â‚¹0 cost` });
+  });
+  return cards;
+}
+
+// Chase today: aging bar (1â€“7 / 8â€“14 / 15+ days, widths by amount) and top overdue list
+const AGING = [
+  { label: '1â€“7 days', cls: 'kp-age-1', max: 7 },
+  { label: '8â€“14 days', cls: 'kp-age-2', max: 14 },
+  { label: '15+ days', cls: 'kp-age-3', max: Infinity }
+];
+const AVATAR_COLORS = ['#1D63ED', '#7C3AED', '#0D9488', '#DB2777', '#D97706'];
+function renderChase(overdueInv, today) {
+  const aged = AGING.map(() => 0);
+  overdueInv.forEach(i => {
+    const days = Math.max(1, dayDiff(parseISO(i.dueDate), today));
+    const k = days <= 7 ? 0 : days <= 14 ? 1 : 2;
+    aged[k] += i.amount - i.paid;
+  });
+  const total = aged.reduce((s, v) => s + v, 0);
+  $('overduePill').textContent = `${fmt.format(total)} overdue`;
+  $('agingBar').innerHTML = AGING.map((a, k) => aged[k] > 0
+    ? `<span class="kp-age ${a.cls}" style="flex:${aged[k]} 0 0"></span>` : '').join('');
+  $('agingLabels').innerHTML = AGING.map((a, k) =>
+    `<span>${a.label}${total > 0 ? ' Â· ' + fmt.format(aged[k]) : ''}</span>`).join('');
+  const rows = overdueInv.slice()
+    .sort((a, b) => (b.amount - b.paid) - (a.amount - a.paid)).slice(0, 5)
+    .map((i, k) => {
+      const s = state.students.find(x => x.id === i.studentId); if (!s) return '';
+      const days = dayDiff(parseISO(i.dueDate), today);
+      return `<div class="kp-chase-item">
+        <span class="kp-avatar" style="background:${AVATAR_COLORS[k % AVATAR_COLORS.length]}">${esc(s.name.charAt(0).toUpperCase())}</span>
+        <div class="kp-chase-main"><div class="kp-chase-name">${esc(s.name)}</div>
+          <div class="kp-chase-detail">${fmt.format(i.amount - i.paid)} overdue Â· ${days > 0 ? days + ' days late' : 'due now'}</div></div>
+        <button type="button" class="btn btn-sm kp-btn-primary" data-act="remind" data-id="${esc(i.id)}">Remind</button>
+      </div>`;
+    }).join('');
+  $('chaseList').innerHTML = rows || '<p class="small text-secondary mb-0">Nothing overdue right now.</p>';
+}
+
+
+// Forecast numbers come from GET /api/dashboard: { base, baseline, preview, openingCash }
+async function renderDashboard() {
+  const today = new Date();
+  const H = Number($('horizon').value);
+  const sid = $('whatStudent').value;
+  const whatIf = sid ? { sid, delay: $('whatDelay').value } : null;
+  let dash;
+  try { dash = await api('GET', dashboardQuery(H, whatIf)); } catch (err) { showError(err); return; }
+  const base = dash.base;
+  const preview = dash.preview || null;
+  const baseline = dash.baseline || base;
+  if (dash.openingCash != null) state.openingCash = dash.openingCash;
+  const rent = state.bills.find(b => b.id === 'rent');
+  const rentOcc = billOccurrences(rent, today, 400)[0];
+  const rentDay = rentOcc ? rentOcc.date.getDate() : rent.dueDay;
+  const rentWhen = rentOcc ? (rentOcc.offset === 0 ? ' â€” today' : ` â€” in ${rentOcc.offset} day${rentOcc.offset === 1 ? '' : 's'}`) : '';
+  const pct = Math.round(base.shortfallProb * 100);
+  const pctAfter = Math.round((preview ? preview.shortfallProb : base.shortfallProb) * 100);
+
+  // Shortfall banner: amber alert above 10%, compact emerald buffer otherwise
+  const banner = $('riskBanner');
+  if (base.shortfallProb > 0.10) {
+    banner.className = 'kp-banner kp-banner-risk';
+    banner.innerHTML = `
+      <span class="kp-banner-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+      <div class="kp-banner-msg"><strong>${pct}% chance you can't cover Rent (${fmt.format(rent.amount)}) on the ${ordinal(rentDay)}${rentWhen}</strong></div>
+      <button type="button" class="btn btn-sm kp-btn-primary" data-act="rescue">See Rescue Plan</button>`;
+  } else {
+    banner.className = 'kp-banner kp-banner-ok';
+    banner.innerHTML = `<span class="kp-banner-icon" aria-hidden="true">âœ“</span><div class="kp-banner-msg">Healthy buffer: only a ${pct}% chance of running short before Rent.</div>`;
+  }
+
+  // KPI strip (computed from current-month invoices and open overdue balances)
+  const monthKey = ymOf(today);
+  const cur = state.invoices.filter(i => i.dueDate.startsWith(monthKey));
+  const expected = cur.reduce((s, i) => s + i.amount, 0);
+  const collected = cur.reduce((s, i) => s + Math.min(i.paid, i.amount), 0);
+  const paidCount = cur.filter(i => i.status === 'PAID').length;
+  const overdueInv = state.invoices.filter(i => (i.status === 'OVERDUE' || i.status === 'PARTLY_PAID') && i.amount - i.paid > 0);
+  const overdueSum = overdueInv.reduce((s, i) => s + (i.amount - i.paid), 0);
+  const lateStudents = new Set(overdueInv.map(i => i.studentId)).size;
+  $('kpiExpected').textContent = fmt.format(expected);
+  $('kpiExpectedSub').textContent = `${state.students.length} students`;
+  $('kpiCollected').textContent = fmt.format(collected);
+  $('kpiCollectedSub').textContent = `${paidCount} of ${cur.length} paid`;
+  $('kpiOverdue').textContent = fmt.format(overdueSum);
+  $('kpiOverdueSub').textContent = `${lateStudents} student${lateStudents === 1 ? '' : 's'} late`;
+  $('kpiNextBill').textContent = rent ? fmt.format(rent.amount) : 'â€”';
+  $('kpiNextBillSub').textContent = `Rent due on the ${ordinal(rentDay)}`;
+
+  // Live what-if readout: shortfall without the what-if -> with it
+  $('whatIfReadout').textContent = `${Math.round(baseline.shortfallProb * 100)}% â†’ ${pct}%`;
+  document.querySelectorAll('[data-h]').forEach(b => b.classList.toggle('active', Number(b.dataset.h) === H));
+
+  // Rescue Plan header badge: current risk -> risk after toggled actions
+  $('riskBadge').textContent = `Risk: ${pct}% â†’ about ${pctAfter}%`;
+
+  // Value this month: overdue balances x selected recovery assumption
+  const level = RECOVERY[recoveryLevel];
+  $('valueFig').textContent = fmt.format(Math.round(overdueSum * level.rate));
+  $('valueNote').textContent = `${level.label} recovery: ${Math.round(level.rate * 100)}% of ${fmt.format(overdueSum)} overdue`;
+  document.querySelectorAll('[data-recovery]').forEach(b => b.classList.toggle('active', b.dataset.recovery === recoveryLevel));
+
+  renderChase(overdueInv, today);
+
+  const labels = [];
+  for (let t = 0; t <= H; t++) { const d = addDays(today, t); labels.push(`${d.getDate()} ${MON[d.getMonth()]}`); }
+  const markers = [];
+  state.bills.forEach(b => billOccurrences(b, today, H).forEach(o => {
+    if (o.offset >= 1 && o.offset <= H) markers.push({ index: o.offset, label: b.name });
+  }));
+  drawChart(labels, base, preview, markers, rent.amount);
+
+  $('rescueList').innerHTML = rescueCards().map((c, idx) => `
+    <label class="kp-action">
+      <span class="kp-action-num">${idx + 1}</span>
+      <span class="kp-action-body"><span class="kp-action-title">${c.title}</span><span class="kp-action-gain">${c.gain}</span></span>
+      <span class="kp-switch"><input class="kp-switch-input" type="checkbox" role="switch" data-tid="${c.tid}" ${rescueToggles.has(c.tid) ? 'checked' : ''}><span class="kp-switch-track"></span></span>
+    </label>`).join('') || '<p class="small text-secondary mb-0">Nothing to rescue right now.</p>';
+}
+
+
+function refreshStudentSelects() {
+  const opts = state.students.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join('');
+  const w = $('whatStudent'), keep = w.value;
+  w.innerHTML = '<option value="">â€” none â€”</option>' + opts;
+  w.value = keep;
+  $('invStudent').innerHTML = opts;
+}
+
+/* ===== Rendering: invoices ===== */
+const STATUS_CLS = { PAID: 'success', PARTLY_PAID: 'warning', OVERDUE: 'danger', SENT: 'primary', DRAFT: 'secondary' };
+function renderInvoices() {
+  const f = $('invFilter').value;
+  const rows = state.invoices
+    .filter(i => !f || i.status === f)
+    .sort((a, b) => b.dueDate.localeCompare(a.dueDate))
+    .slice(0, 200)
+    .map(i => {
+      const s = state.students.find(x => x.id === i.studentId);
+      const unpaid = i.status !== 'PAID';
+      return `<tr>
+        <td>${esc(s ? s.name : '(deleted)')}</td>
+        <td class="text-end">${fmt.format(i.amount)}</td>
+        <td class="text-end">${fmt.format(i.paid)}</td>
+        <td>${esc(i.dueDate)}</td>
+        <td><span class="badge text-bg-${STATUS_CLS[i.status] || 'secondary'}">${esc(i.status)}</span></td>
+        <td class="text-nowrap">
+          ${unpaid ? `<button class="btn btn-sm btn-outline-dark" data-act="pay" data-id="${esc(i.id)}">Record payment</button>
+          <button class="btn btn-sm btn-outline-success" data-act="remind" data-id="${esc(i.id)}">Remind</button>` : ''}
+        </td></tr>`;
+    }).join('');
+  $('invBody').innerHTML = rows || '<tr><td colspan="6" class="text-secondary">No invoices.</td></tr>';
+}
+
+/* ===== Rendering: students ===== */
+function renderStudents() {
+  $('stuBody').innerHTML = state.students.map(s => `<tr>
+    <td>${esc(s.name)}</td><td>${esc(s.phone)}</td><td class="text-end">${fmt.format(s.fee)}</td>
+    <td>${esc(s.behaviour)}</td>
+    <td class="text-nowrap">
+      <button class="btn btn-sm btn-outline-dark" data-act="edit" data-id="${esc(s.id)}">Edit</button>
+      <button class="btn btn-sm btn-outline-danger" data-act="delete" data-id="${esc(s.id)}">Delete</button>
+    </td></tr>`).join('') || '<tr><td colspan="5" class="text-secondary">No students.</td></tr>';
+}
+
+/* ===== Rendering: bills ===== */
+function renderBills() {
+  $('billBody').innerHTML = state.bills.map(b => `<tr data-row="${esc(b.id)}">
+    <td>${esc(b.name)}</td>
+    <td><input class="form-control form-control-sm" type="number" min="0" step="1" data-f="amount" value="${b.amount}"></td>
+    <td><input class="form-control form-control-sm" type="number" min="1" max="28" step="1" data-f="dueDay" value="${b.dueDay}"></td>
+    <td><input class="form-control form-control-sm" type="number" min="0" step="1" data-f="grace" value="${b.grace}"></td>
+    <td><button class="btn btn-sm btn-dark" data-act="save-bill" data-id="${esc(b.id)}">Save</button></td>
+  </tr>`).join('');
+}
+
+/* ===== Rendering: backtest ===== */
+async function renderBacktest() {
+  if (!backtestCache) {
+    try { backtestCache = await api('GET', '/api/backtest'); } catch (err) { showError(err); return; }
+  }
+  $('btBody').innerHTML = backtestCache.map(r => `<tr>
+    <td>${esc(r.month)}</td>
+    <td class="text-end">${Math.round(r.prob * 100)}%</td>
+    <td>${BUCKETS[r.bucket].label}</td>
+    <td>${r.observed ? 'Shortfall happened' : 'No shortfall'}</td></tr>`).join('');
+  $('calBody').innerHTML = BUCKETS.map((b, i) => {
+    const rows = backtestCache.filter(r => r.bucket === i);
+    const hits = rows.filter(r => r.observed).length;
+    return `<tr><td>${b.label}</td><td>${b.def}</td><td class="text-end">${rows.length}</td>
+      <td class="text-end">${rows.length ? Math.round(hits / rows.length * 100) + '%' : 'â€”'}</td></tr>`;
+  }).join('');
+}
+
+/* ===== Routing (instant, no reloads) ===== */
+const VIEWS = ['dashboard', 'invoices', 'students', 'bills', 'backtest'];
+function route() {
+  const m = (location.hash.match(/^#\/(\w+)/) || [])[1];
+  const name = VIEWS.includes(m) ? m : 'dashboard';
+  VIEWS.forEach(v => $('view-' + v).classList.toggle('d-none', v !== name));
+  document.querySelectorAll('[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === name));
+  if (name === 'dashboard') renderDashboard();
+  if (name === 'backtest') renderBacktest();
+}
+
+/* Subheader: student count and current month/year from live data */
+function renderHeader() {
+  const today = new Date();
+  $('subStudents').textContent = state.students.length;
+  $('subMonth').textContent = `${MONTHS_FULL[today.getMonth()]} ${today.getFullYear()}`;
+}
+
+function renderAll() {
+  refreshStudentSelects();
+  renderInvoices();
+  renderStudents();
+  renderBills();
+  renderHeader();
+  backtestCache = null;
+  route();
+}
+
+/* ===== Demo controls ===== */
+async function loadBadDay() {
+  try {
+    await api('POST', '/api/demo/bad-day');
+  } catch (err) { showError(err); return; }
+  rescueToggles = new Set();
+  await refreshAll();
+}
+async function resetDemo() {
+  try {
+    await api('POST', '/api/demo/reset');
+  } catch (err) { showError(err); return; }
+  rescueToggles = new Set();
+  await refreshAll();
+}
+$('btnBad').addEventListener('click', loadBadDay);
+$('btnReset').addEventListener('click', resetDemo);
+
+/* ===== Forms & actions ===== */
+['horizon', 'whatStudent', 'whatDelay'].forEach(id => $(id).addEventListener('change', renderDashboard));
+
+$('rescueList').addEventListener('change', e => {
+  const tid = e.target.dataset.tid;
+  if (!tid) return;
+  if (e.target.checked) rescueToggles.add(tid); else rescueToggles.delete(tid);
+  renderDashboard();
+});
+
+// Forecast horizon segmented toggle (drives the hidden #horizon select)
+document.querySelectorAll('[data-h]').forEach(b => b.addEventListener('click', () => {
+  $('horizon').value = b.dataset.h; renderDashboard();
+}));
+// Value this month: Low / Medium / High recovery assumption
+document.querySelectorAll('[data-recovery]').forEach(b => b.addEventListener('click', () => {
+  recoveryLevel = b.dataset.recovery; renderDashboard();
+}));
+$('btnApply').addEventListener('click', () => renderDashboard());
+// "See Rescue Plan" in the shortfall banner smooth-scrolls to the Rescue Plan card
+$('riskBanner').addEventListener('click', e => {
+  if (e.target.closest('[data-act="rescue"]')) $('rescuePlan').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+// Chase today: Remind opens the existing WhatsApp reminder modal
+$('chaseList').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act="remind"]');
+  if (!btn) return;
+  const inv = state.invoices.find(x => x.id === btn.dataset.id);
+  if (inv) openRemind(inv);
+});
+
+
+$('invFilter').addEventListener('change', renderInvoices);
+
+$('invForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  try {
+    await api('POST', '/api/invoices', {
+      studentId: $('invStudent').value, amount: Number($('invAmount').value),
+      dueDate: $('invDue').value, status: $('invStatus').value
+    });
+  } catch (err) { showError(err); return; }
+  e.target.reset();
+  await refreshAll();
+});
+
+let payingId = null;
+$('invBody').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const inv = state.invoices.find(x => x.id === btn.dataset.id);
+  if (!inv) return;
+  if (btn.dataset.act === 'pay') {
+    payingId = inv.id;
+    const left = inv.amount - inv.paid;
+    $('payInfo').textContent = `Outstanding: ${fmt.format(left)}`;
+    $('payAmount').value = left; $('payAmount').max = left;
+    bootstrap.Modal.getOrCreateInstance($('payModal')).show();
+  } else if (btn.dataset.act === 'remind') {
+    openRemind(inv);
+  }
+});
+
+$('payForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const inv = state.invoices.find(x => x.id === payingId);
+  if (!inv) return;
+  const amt = Math.min(Number($('payAmount').value), inv.amount - inv.paid);
+  if (!(amt > 0)) return;
+  try {
+    await api('POST', '/api/invoices/' + encodeURIComponent(inv.id) + '/pay', { amount: amt, method: $('payMethod').value });
+  } catch (err) { showError(err); return; }
+  bootstrap.Modal.getOrCreateInstance($('payModal')).hide();
+  await refreshAll();
+});
+
+let remindDrafts = [];
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch (err) { /* ignore */ }
+  ta.remove();
+  return Promise.resolve();
+}
+function openRemind(inv) {
+  const s = state.students.find(x => x.id === inv.studentId);
+  const name = s ? s.name : 'there';
+  const amt = fmt.format(inv.amount), due = fmtDate(parseISO(inv.dueDate));
+  remindDrafts = [
+    { label: 'Gentle', text: `Hi ${name}, hope you're doing well! A gentle reminder that the invoice of ${amt} was due on ${due}. Please let me know if it's already paid. Thank you! â€“ Meera` },
+    { label: 'Firm', text: `Hi ${name}, the invoice of ${amt} was due on ${due} and is still pending. Please make the payment at the earliest and share the confirmation. â€“ Meera` },
+    { label: 'Final', text: `Hi ${name}, this is a final reminder: the invoice of ${amt} was due on ${due} and remains unpaid. Please clear it within 2 days. â€“ Meera` }
+  ];
+  $('remindBody').innerHTML = remindDrafts.map((d, i) => `
+    <div class="mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-semibold">${d.label}</span>
+        <span class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-dark" data-copy="${i}">Copy</button>
+          <a class="btn btn-sm btn-success" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(d.text)}">Open in WhatsApp</a>
+        </span>
+      </div>
+      <textarea class="form-control" rows="3" readonly>${esc(d.text)}</textarea>
+    </div>`).join('');
+  bootstrap.Modal.getOrCreateInstance($('remindModal')).show();
+}
+$('remindBody').addEventListener('click', e => {
+  const i = e.target.dataset.copy;
+  if (i !== undefined) copyText(remindDrafts[Number(i)].text).then(() => { e.target.textContent = 'Copied'; });
+});
+
+function resetStudentForm() {
+  $('stuForm').reset(); $('stuId').value = '';
+  $('stuFormTitle').textContent = 'Add student';
+}
+$('stuForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const rec = { name: $('stuName').value.trim(), phone: $('stuPhone').value.trim(),
+    fee: Number($('stuFee').value), behaviour: $('stuBehaviour').value };
+  const id = $('stuId').value;
+  if (id) {
+    // Edit: no server endpoint specified yet, so it stays client-side
+    Object.assign(state.students.find(s => s.id === id), rec);
+    resetStudentForm();
+    save(); renderAll();
+    return;
+  }
+  try { await api('POST', '/api/students', rec); } catch (err) { showError(err); return; }
+  resetStudentForm();
+  await refreshAll();
+});
+$('stuCancel').addEventListener('click', resetStudentForm);
+$('stuBody').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const id = btn.dataset.id;
+  if (btn.dataset.act === 'edit') {
+    const s = state.students.find(x => x.id === id);
+    $('stuId').value = s.id; $('stuName').value = s.name; $('stuPhone').value = s.phone;
+    $('stuFee').value = s.fee; $('stuBehaviour').value = s.behaviour;
+    $('stuFormTitle').textContent = 'Edit student';
+  } else if (btn.dataset.act === 'delete') {
+    if (!confirm('Delete this student and their invoices?')) return;
+    state.students = state.students.filter(s => s.id !== id);
+    state.invoices = state.invoices.filter(i => i.studentId !== id);
+    save(); renderAll();
+  }
+});
+
+$('billBody').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-act="save-bill"]');
+  if (!btn) return;
+  const bill = state.bills.find(b => b.id === btn.dataset.id);
+  const row = btn.closest('tr');
+  const val = f => Number(row.querySelector(`[data-f="${f}"]`).value);
+  bill.amount = val('amount');
+  bill.dueDay = Math.min(28, Math.max(1, val('dueDay')));
+  bill.grace = Math.max(0, val('grace'));
+  save(); renderAll();
+});
+
+window.addEventListener('hashchange', route);
+refreshStudentSelects();
+renderAll();
+refreshAll();
+</script>
+</body>
+</html>
+
+
+

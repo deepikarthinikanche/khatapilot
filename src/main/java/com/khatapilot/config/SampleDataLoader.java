@@ -10,6 +10,7 @@ import com.khatapilot.repository.StudentRepository;
 import com.khatapilot.service.AppSettingService;
 import com.khatapilot.service.InvoiceService;
 import com.khatapilot.service.RecurringBillService;
+import jakarta.persistence.EntityManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -94,6 +95,7 @@ public class SampleDataLoader implements CommandLineRunner {
     private final InvoiceService invoiceService;
     private final RecurringBillService recurringBillService;
     private final AppSettingService appSettingService;
+    private final EntityManager entityManager;
 
     public SampleDataLoader(StudentRepository studentRepository,
                             InvoiceRepository invoiceRepository,
@@ -101,7 +103,8 @@ public class SampleDataLoader implements CommandLineRunner {
                             RecurringBillRepository recurringBillRepository,
                             InvoiceService invoiceService,
                             RecurringBillService recurringBillService,
-                            AppSettingService appSettingService) {
+                            AppSettingService appSettingService,
+                            EntityManager entityManager) {
         this.studentRepository = studentRepository;
         this.invoiceRepository = invoiceRepository;
         this.paymentRepository = paymentRepository;
@@ -109,6 +112,20 @@ public class SampleDataLoader implements CommandLineRunner {
         this.invoiceService = invoiceService;
         this.recurringBillService = recurringBillService;
         this.appSettingService = appSettingService;
+        this.entityManager = entityManager;
+    }
+
+    /**
+     * Payments and invoices first, then bills and students, so foreign keys are removed in order. Bulk deletes skip
+     * the persistence context, so it is flushed and cleared afterwards to avoid stale entities being reused.
+     */
+    private void clearAllData() {
+        paymentRepository.deleteAllInBulk();
+        invoiceRepository.deleteAllInBulk();
+        recurringBillRepository.deleteAllInBulk();
+        studentRepository.deleteAllInBulk();
+        entityManager.flush();
+        entityManager.clear();
     }
 
     /**
@@ -163,13 +180,7 @@ public class SampleDataLoader implements CommandLineRunner {
         seed();
     }
 
-    /** Payments and invoices first, then bills and students, so foreign keys are removed in order. */
-    private void clearAllData() {
-        paymentRepository.deleteAll();
-        invoiceRepository.deleteAll();
-        recurringBillRepository.deleteAll();
-        studentRepository.deleteAll();
-    }
+
 
     @Override
     @Transactional
